@@ -136,6 +136,17 @@ async function createAvailableName(directoryHandle, fileName, style = "number") 
   }
 }
 
+async function createChildDirectory(parentDirectoryHandle, name) {
+  try {
+    await parentDirectoryHandle.getDirectoryHandle(name);
+    throw Object.assign(new Error("같은 이름의 폴더가 이미 있습니다."), { code: "DIRECTORY_EXISTS" });
+  } catch (error) {
+    if (error.code === "DIRECTORY_EXISTS") throw error;
+    if (error.name !== "NotFoundError") throw error;
+  }
+  return parentDirectoryHandle.getDirectoryHandle(name, { create: true });
+}
+
 // 대상 쓰기와 크기 검증이 모두 끝난 뒤에만 원본을 제거한다.
 async function copyThenRemove(image, targetDirectoryHandle, targetName, overwrite = false) {
   if (!overwrite && (await entryExists(targetDirectoryHandle, targetName))) {
@@ -194,6 +205,7 @@ function getExtension(fileName) {
 window.BarcelFileSystem = {
   copyThenRemove,
   createAvailableName,
+  createChildDirectory,
   describeError,
   entryExists,
   findFolderNode,

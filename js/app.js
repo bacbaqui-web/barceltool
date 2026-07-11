@@ -4,6 +4,7 @@
 const {
   copyThenRemove,
   createAvailableName,
+  createChildDirectory,
   describeError,
   entryExists,
   findFolderNode,
@@ -1045,15 +1046,78 @@ async function chooseQuickMoveFolder(slotIndex) {
   if (!state.folderTree || state.quickMoveSession?.busy) return;
   const body = createElement("div");
   body.appendChild(createElement("p", "", `${slotIndex + 1}번 빠른 이동 폴더를 선택하세요.`));
+  const createPanel = createElement("div", "quick-folder-create");
+  const createHeader = createElement("div", "quick-folder-create-header");
+  const createLocation = createElement("span", "quick-folder-create-location", `생성 위치: ${state.folderTree.name}`);
+  const showCreateButton = createElement("button", "secondary-button", "새 폴더 만들기");
+  showCreateButton.type = "button";
+  createHeader.append(createLocation, showCreateButton);
+  const createRow = createElement("div", "quick-folder-create-row");
+  createRow.hidden = true;
+  const createInput = document.createElement("input");
+  createInput.type = "text";
+  createInput.placeholder = "새 폴더 이름";
+  createInput.maxLength = 120;
+  const createConfirm = createElement("button", "primary", "생성");
+  createConfirm.type = "button";
+  const createCancel = createElement("button", "", "취소");
+  createCancel.type = "button";
+  const createError = createElement("div", "quick-folder-create-error");
+  createRow.append(createInput, createConfirm, createCancel);
+  createPanel.append(createHeader, createRow, createError);
+  body.appendChild(createPanel);
   const picker = createElement("div", "folder-picker");
   body.appendChild(picker);
-  let targetNode = null;
+  let targetNode = state.folderTree;
   picker.appendChild(createFolderPickerNode(state.folderTree, 0, (node, button) => {
     targetNode = node;
+    createLocation.textContent = `생성 위치: ${node.fullPath.replaceAll("/", " > ")}`;
     picker.querySelectorAll(".folder-choice.selected").forEach((item) => item.classList.remove("selected"));
     button.classList.add("selected");
     setModalActionEnabled("quick-folder-confirm", true);
   }, true));
+  showCreateButton.addEventListener("click", () => {
+    createRow.hidden = false;
+    createError.textContent = "";
+    createInput.focus();
+    createInput.select();
+  });
+  createCancel.addEventListener("click", () => {
+    createRow.hidden = true;
+    createInput.value = "";
+    createError.textContent = "";
+  });
+  const createFolder = async () => {
+    const folderName = createInput.value.trim();
+    if (!folderName || /[<>:"/\\|?*\u0000-\u001F]/.test(folderName) || folderName.endsWith(".")) {
+      createError.textContent = "사용할 수 있는 폴더 이름을 입력해주세요.";
+      return;
+    }
+    createConfirm.disabled = true;
+    createInput.disabled = true;
+    createError.textContent = "";
+    try {
+      const directoryHandle = await createChildDirectory(targetNode.directoryHandle, folderName);
+      const fullPath = `${targetNode.fullPath}/${folderName}`;
+      const newNode = { name: folderName, fullPath, directoryHandle, children: new Map() };
+      targetNode.children.set(folderName, newNode);
+      state.quickMoveSlots[slotIndex] = fullPath;
+      saveQuickMoveSlots();
+      renderFolderTree();
+      renderQuickMoveSlots();
+      closeModal("created");
+    } catch (error) {
+      createError.textContent = describeError(error);
+      createConfirm.disabled = false;
+      createInput.disabled = false;
+      createInput.focus();
+    }
+  };
+  createConfirm.addEventListener("click", createFolder);
+  createInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); createFolder(); }
+    if (event.key === "Escape") { event.preventDefault(); createCancel.click(); }
+  });
   const confirmed = await showModal({
     title: "빠른 이동 폴더 추가",
     body,
@@ -1062,6 +1126,7 @@ async function chooseQuickMoveFolder(slotIndex) {
       { id: "quick-folder-confirm", label: "추가", value: true, className: "primary", disabled: true },
     ],
   });
+  if (confirmed === "created") return;
   if (!confirmed || !targetNode) return;
   state.quickMoveSlots[slotIndex] = targetNode.fullPath;
   saveQuickMoveSlots();
