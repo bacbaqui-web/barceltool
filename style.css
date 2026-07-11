@@ -152,8 +152,8 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .quick-move-status[hidden] { display: none; }
 .quick-move-progress { color: #8fc5ff; font-size: 12px; font-weight: 800; }
 .quick-move-stats { color: #b9c0c9; white-space: nowrap; }
-.quick-move-skip { min-height: 28px; padding: 0 12px; color: #f0f2f5; border: 1px solid #68717d; border-radius: 6px; background: #414750; font-size: 11px; font-weight: 750; }
-.quick-move-skip:hover { background: #515965; }
+.quick-move-skip, .quick-move-undo { min-height: 28px; padding: 0 12px; color: #f0f2f5; border: 1px solid #68717d; border-radius: 6px; background: #414750; font-size: 11px; font-weight: 750; }
+.quick-move-skip:hover, .quick-move-undo:not(:disabled):hover { background: #515965; }
 .quick-move-rail { position: absolute; z-index: 5; top: 50%; width: 164px; display: grid; gap: 10px; transform: translateY(-50%); pointer-events: none; }
 .quick-move-rail[hidden] { display: none; }
 .quick-move-left { left: 18px; }
@@ -170,6 +170,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .quick-move-slot-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .quick-move-busy .quick-move-slot,
 .quick-move-busy .quick-move-skip,
+.quick-move-busy .quick-move-undo,
 .quick-move-busy .quick-move-toggle { pointer-events: none; opacity: .5; }
 .ext-png { background: #2878df; }
 .ext-jpg, .ext-jpeg { background: #d97706; }

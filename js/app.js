@@ -88,6 +88,7 @@ const elements = {
   quickMoveProgress: document.querySelector("#quickMoveProgress"),
   quickMoveStats: document.querySelector("#quickMoveStats"),
   quickMoveSkip: document.querySelector("#quickMoveSkip"),
+  quickMoveUndo: document.querySelector("#quickMoveUndo"),
   quickMoveLeft: document.querySelector("#quickMoveLeft"),
   quickMoveRight: document.querySelector("#quickMoveRight"),
   modalOverlay: document.querySelector("#modalOverlay"),
@@ -136,6 +137,7 @@ elements.previewOverlay.addEventListener("click", handlePreviewOverlayClick);
 elements.previewRenameButton.addEventListener("click", beginPreviewRename);
 elements.quickMoveToggle.addEventListener("click", toggleQuickMove);
 elements.quickMoveSkip.addEventListener("click", skipQuickMoveImage);
+elements.quickMoveUndo.addEventListener("click", undoQuickMove);
 document.addEventListener("click", (event) => {
   if (!elements.contextMenu.contains(event.target)) hideContextMenu();
 });
@@ -995,6 +997,7 @@ function updateQuickMoveStatus() {
   elements.quickMoveToggle.textContent = `빠른 이동 중 · ${position} / ${stats.total}`;
   elements.quickMoveProgress.textContent = `${position} / ${stats.total}`;
   elements.quickMoveStats.textContent = `이동 ${stats.moved} · 이동 안 함 ${stats.skipped} · 실패 ${stats.failed}`;
+  elements.quickMoveUndo.disabled = session.busy || !session.canUndo;
 }
 
 function renderQuickMoveSlots() {
@@ -1165,9 +1168,40 @@ function skipQuickMoveImage() {
   else showQuickMoveCurrent();
 }
 
+async function undoQuickMove() {
+  const session = state.quickMoveSession;
+  const entry = session?.lastCompletedEntry;
+  if (!session || !entry || session.busy) return;
+  session.busy = true;
+  setQuickMoveBusy(true);
+  try {
+    if (entry.status === "moved") {
+      await imageLoadQueue.enqueue(entry.image, -1);
+      const restoreName = await createAvailableName(entry.originalParentDirectoryHandle, entry.originalName);
+      const result = await copyThenRemove(entry.image, entry.originalParentDirectoryHandle, restoreName, false);
+      const originalFolderNode = {
+        name: entry.originalFolderPath.split("/").pop(),
+        fullPath: entry.originalFolderPath,
+        directoryHandle: entry.originalParentDirectoryHandle,
+        children: new Map(),
+      };
+      updateMovedImage(entry.image, originalFolderNode, result);
+    }
+    session.reopenLastCompleted();
+  } catch (error) {
+    elements.quickMoveStats.textContent = `되돌리기 실패 · ${describeError(error)}`;
+    return;
+  } finally {
+    session.busy = false;
+    setQuickMoveBusy(false);
+  }
+  showQuickMoveCurrent();
+}
+
 function setQuickMoveBusy(busy) {
   elements.previewOverlay.querySelector(".preview-window")?.classList.toggle("quick-move-busy", busy);
   elements.quickMoveSkip.disabled = busy;
+  elements.quickMoveUndo.disabled = busy || !state.quickMoveSession?.canUndo;
   elements.quickMoveToggle.disabled = busy;
   elements.previewRenameButton.disabled = busy;
   elements.previewFitEnabled.disabled = busy;
@@ -1245,6 +1279,7 @@ function resetQuickMoveUi() {
   elements.quickMoveToggle.classList.remove("active");
   elements.quickMoveToggle.disabled = false;
   elements.quickMoveToggle.textContent = "빠른 이동";
+  elements.quickMoveUndo.disabled = true;
 }
 
 function openSelectedPreview() {
@@ -1404,6 +1439,11 @@ function handleKeyDown(event) {
       if (state.quickMoveSlots[slotIndex]) moveQuickImageToSlot(slotIndex);
       else chooseQuickMoveFolder(slotIndex);
     }
+    return;
+  }
+  if (state.quickMoveSession && event.key === "Backspace") {
+    event.preventDefault();
+    undoQuickMove();
     return;
   }
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
