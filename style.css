@@ -139,7 +139,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .thumbnail-card.selected .thumbnail-check { opacity: 1; transform: scale(1); }
 .empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 30px; text-align: center; }
 .empty-state[hidden] { display: none; }
-.empty-icon { width: 68px; height: 68px; margin-bottom: 18px; display: grid; place-items: center; color: #98a2af; background: #e8ebef; border-radius: 16px; font-size: 34px; transform: rotate(90deg); }
+.empty-illustration { width: min(220px, 38vw); max-height: 40vh; height: auto; margin-bottom: 18px; display: block; object-fit: contain; }
 .empty-state h1 { margin: 0 0 9px; font-size: 20px; }
 .empty-state p { margin: 0 0 22px; color: #69717d; font-size: 14px; }
 .empty-state > span { margin-top: 13px; color: #9097a1; font-size: 11px; }
@@ -302,7 +302,6 @@ html[data-theme="dark"] .thumbnail-card:hover { box-shadow: 0 4px 14px rgba(0,0,
 html[data-theme="dark"] .thumbnail-card.selected { border-color: #68a7f0; box-shadow: 0 0 0 2px rgba(104,167,240,.2), 0 4px 14px rgba(0,0,0,.48); }
 html[data-theme="dark"] .thumbnail-image-box { background: #17191d; }
 html[data-theme="dark"] .thumbnail-image-box img:not([src]) { background: linear-gradient(110deg, #25292f 30%, #343940 50%, #25292f 70%); background-size: 200% 100%; }
-html[data-theme="dark"] .empty-icon { color: #aab2bd; background: #30343b; }
 html[data-theme="dark"] .empty-state h1 { color: #eceff3; }
 html[data-theme="dark"] .empty-state p { color: #aab1bb; }
 html[data-theme="dark"] .empty-state > span { color: #858e9a; }
