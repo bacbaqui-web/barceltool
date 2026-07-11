@@ -52,6 +52,7 @@ const state = {
   quickMoveSlots: [],
   includeDescendants: readSavedIncludeDescendants(),
   directImageCounts: new Map(),
+  descendantImageCounts: new Map(),
 };
 
 const elements = {
@@ -397,14 +398,34 @@ function setScanning(scanning) {
 function renderFolderTree() {
   elements.folderTree.replaceChildren();
   if (!state.folderTree) return;
-  calculateDirectImageCounts();
+  calculateFolderImageCounts();
   elements.folderTree.appendChild(createTreeNodeElement(state.folderTree, 0, true));
 }
 
-function calculateDirectImageCounts() {
-  const counts = new Map();
-  state.images.forEach((image) => counts.set(image.folderPath, (counts.get(image.folderPath) || 0) + 1));
-  state.directImageCounts = counts;
+function calculateFolderImageCounts() {
+  const directCounts = new Map();
+  state.images.forEach((image) => directCounts.set(image.folderPath, (directCounts.get(image.folderPath) || 0) + 1));
+  const descendantCounts = new Map();
+  const totalForNode = (node) => {
+    let total = directCounts.get(node.fullPath) || 0;
+    node.children.forEach((child) => { total += totalForNode(child); });
+    descendantCounts.set(node.fullPath, total);
+    return total;
+  };
+  if (state.folderTree) totalForNode(state.folderTree);
+  state.directImageCounts = directCounts;
+  state.descendantImageCounts = descendantCounts;
+}
+
+function getDisplayedFolderCount(path) {
+  const counts = state.includeDescendants ? state.descendantImageCounts : state.directImageCounts;
+  return counts.get(path) || 0;
+}
+
+function getFolderCountDescription(count) {
+  return state.includeDescendants
+    ? `이 폴더와 하위 폴더 이미지 ${count.toLocaleString("ko-KR")}개`
+    : `이 폴더에 직접 들어 있는 이미지 ${count.toLocaleString("ko-KR")}개`;
 }
 
 function createTreeNodeElement(node, depth, expandedByDefault = false) {
@@ -430,9 +451,9 @@ function createTreeNodeElement(node, depth, expandedByDefault = false) {
   });
   const icon = createElement("span", "folder-icon", "📁");
   const name = createElement("span", "folder-name", node.name);
-  const directCount = state.directImageCounts.get(node.fullPath) || 0;
-  const count = createElement("span", `folder-image-count${directCount ? "" : " empty"}`, directCount.toLocaleString("ko-KR"));
-  count.title = `이 폴더에 직접 들어 있는 이미지 ${directCount.toLocaleString("ko-KR")}개`;
+  const displayedCount = getDisplayedFolderCount(node.fullPath);
+  const count = createElement("span", `folder-image-count${displayedCount ? "" : " empty"}`, displayedCount.toLocaleString("ko-KR"));
+  count.title = getFolderCountDescription(displayedCount);
   row.append(toggle, icon, name, count);
   row.addEventListener("click", () => selectFolder(node.fullPath));
   row.addEventListener("dragover", (event) => {
@@ -475,17 +496,15 @@ function selectTrash() {
 
 function updateVisibleImages({ resetScroll = false, preserveNodes = false } = {}) {
   const prefix = `${state.selectedFolderPath}/`;
-  const directCounts = new Map();
   const visibleImages = [];
   state.images.forEach((image) => {
-    directCounts.set(image.folderPath, (directCounts.get(image.folderPath) || 0) + 1);
     if (state.viewingTrash) return;
     const matches = state.includeDescendants
       ? image.relativePath.startsWith(prefix)
       : image.folderPath === state.selectedFolderPath;
     if (matches) visibleImages.push(image);
   });
-  state.directImageCounts = directCounts;
+  calculateFolderImageCounts();
   state.visibleImages = state.viewingTrash ? state.trashImages : visibleImages;
   updateFolderImageCountBadges();
   const previousScrollTop = elements.imageGrid.scrollTop;
@@ -496,12 +515,12 @@ function updateVisibleImages({ resetScroll = false, preserveNodes = false } = {}
 
 function updateFolderImageCountBadges() {
   elements.folderTree.querySelectorAll(".tree-row[data-path]").forEach((row) => {
-    const count = state.directImageCounts.get(row.dataset.path) || 0;
+    const count = getDisplayedFolderCount(row.dataset.path);
     const badge = row.querySelector(".folder-image-count");
     if (!badge) return;
     badge.textContent = count.toLocaleString("ko-KR");
     badge.classList.toggle("empty", count === 0);
-    badge.title = `이 폴더에 직접 들어 있는 이미지 ${count.toLocaleString("ko-KR")}개`;
+    badge.title = getFolderCountDescription(count);
   });
 }
 

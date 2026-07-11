@@ -26,7 +26,15 @@
 
       <main class="workspace">
         <aside class="folder-panel" aria-label="폴더 트리">
-          <div class="panel-heading">폴더</div>
+          <div class="panel-heading">
+            <span>폴더</span>
+            <label class="descendants-toggle" for="includeDescendantsToggle" title="선택한 폴더와 하위 폴더의 이미지를 함께 표시합니다.">
+              <span>폴더포함</span>
+              <input id="includeDescendantsToggle" type="checkbox" checked />
+              <span class="descendants-toggle-track" aria-hidden="true"><span></span></span>
+              <strong id="includeDescendantsState">ON</strong>
+            </label>
+          </div>
           <nav id="folderTree" class="folder-tree"></nav>
           <button id="trashSummary" class="trash-summary" type="button" aria-label="휴지통 보기">
             <span class="trash-summary-icon" aria-hidden="true">🗑️</span>
@@ -47,12 +55,6 @@
               </label>
               <button id="moveButton" class="secondary-button" type="button" disabled>이동</button>
               <button id="trashButton" class="danger-ghost-button" type="button" disabled>휴지통으로</button>
-              <label class="descendants-toggle" for="includeDescendantsToggle" title="선택한 폴더의 하위 폴더 이미지도 함께 표시합니다.">
-                <span>하위 폴더 포함</span>
-                <input id="includeDescendantsToggle" type="checkbox" checked />
-                <span class="descendants-toggle-track" aria-hidden="true"><span></span></span>
-                <strong id="includeDescendantsState">ON</strong>
-              </label>
             </div>
           </div>
           <div id="imageGrid" class="image-grid" aria-label="이미지 목록">
