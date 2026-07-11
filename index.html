@@ -96,10 +96,18 @@
             </label>
           </div>
           <span id="previewBadge" class="extension-badge"></span>
+          <button id="quickMoveToggle" class="quick-move-toggle" type="button">빠른 이동</button>
+        </div>
+        <div id="quickMoveStatus" class="quick-move-status" hidden>
+          <span id="quickMoveProgress" class="quick-move-progress"></span>
+          <span id="quickMoveStats" class="quick-move-stats"></span>
+          <button id="quickMoveSkip" class="quick-move-skip" type="button">0 · 이동 안 함</button>
         </div>
         <div class="preview-stage">
           <img id="previewImage" alt="" />
         </div>
+        <div id="quickMoveLeft" class="quick-move-rail quick-move-left" hidden></div>
+        <div id="quickMoveRight" class="quick-move-rail quick-move-right" hidden></div>
         <div id="previewCounter" class="preview-counter">
           <span id="previewIndexLabel" class="preview-index-label"></span>
           <span class="preview-counter-separator">·</span>
@@ -112,6 +120,7 @@
     <script src="./js/file-system.js"></script>
     <script src="./js/modal.js"></script>
     <script src="./js/masonry.js"></script>
+    <script src="./js/quick-move.js"></script>
     <script src="./js/app.js"></script>
   </body>
 </html>

@@ -22,6 +22,7 @@ const {
   updateModalProgress,
 } = window.BarcelModal;
 const { ImageLoadQueue, MasonryLayout, VirtualRenderer } = window.BarcelMasonry;
+const { QuickMoveSession } = window.BarcelQuickMove;
 
 const state = {
   rootDirectoryHandle: null,
@@ -46,6 +47,8 @@ const state = {
   previewWidth: readSavedPreviewWidth(),
   previewFitEnabled: readSavedPreviewFitEnabled(),
   previewVerticalFitEnabled: readSavedPreviewVerticalFitEnabled(),
+  quickMoveSession: null,
+  quickMoveSlots: new Array(6).fill(null),
 };
 
 const elements = {
@@ -79,6 +82,13 @@ const elements = {
   previewIndexLabel: document.querySelector("#previewIndexLabel"),
   previewFileName: document.querySelector("#previewFileName"),
   previewRenameButton: document.querySelector("#previewRenameButton"),
+  quickMoveToggle: document.querySelector("#quickMoveToggle"),
+  quickMoveStatus: document.querySelector("#quickMoveStatus"),
+  quickMoveProgress: document.querySelector("#quickMoveProgress"),
+  quickMoveStats: document.querySelector("#quickMoveStats"),
+  quickMoveSkip: document.querySelector("#quickMoveSkip"),
+  quickMoveLeft: document.querySelector("#quickMoveLeft"),
+  quickMoveRight: document.querySelector("#quickMoveRight"),
   modalOverlay: document.querySelector("#modalOverlay"),
 };
 
@@ -123,6 +133,8 @@ elements.contentPanel.addEventListener("click", handleContentBackgroundClick);
 elements.contextMenu.addEventListener("click", handleContextCommand);
 elements.previewOverlay.addEventListener("click", handlePreviewOverlayClick);
 elements.previewRenameButton.addEventListener("click", beginPreviewRename);
+elements.quickMoveToggle.addEventListener("click", toggleQuickMove);
+elements.quickMoveSkip.addEventListener("click", skipQuickMoveImage);
 document.addEventListener("click", (event) => {
   if (!elements.contextMenu.contains(event.target)) hideContextMenu();
 });
@@ -277,6 +289,8 @@ async function loadFromHandle(preferredFolderPath) {
     state.visibleImages = [];
     state.folderTree = null;
     state.viewingTrash = false;
+    state.quickMoveSlots = new Array(6).fill(null);
+    renderQuickMoveSlots();
     clearSelection();
     closePreview();
     let firstPaintDone = false;
@@ -321,6 +335,7 @@ async function loadFromHandle(preferredFolderPath) {
       ? preferredFolderPath
       : result.folderTree.fullPath;
     state.viewingTrash = false;
+    restoreQuickMoveSlots();
     paintSnapshot(result, !firstPaintDone, true);
   } catch (error) {
     await showInfo("폴더를 읽을 수 없습니다", describeError(error));
@@ -333,6 +348,7 @@ function setScanning(scanning) {
   state.scanning = scanning;
   elements.openButtons.forEach((button) => { button.disabled = scanning || state.operationInProgress; });
   elements.refreshButton.disabled = scanning || state.operationInProgress;
+  elements.quickMoveToggle.disabled = scanning || state.viewingTrash || state.operationInProgress;
 }
 
 function renderFolderTree() {
@@ -900,7 +916,8 @@ async function askConflict(fileName, showApplyOption) {
 }
 
 function updateMovedImage(image, targetNode, result) {
-  URL.revokeObjectURL(image.objectUrl);
+  const oldPath = image.relativePath;
+  if (image.objectUrl) URL.revokeObjectURL(image.objectUrl);
   image.file = result.file;
   image.fileHandle = result.fileHandle;
   image.parentDirectoryHandle = targetNode.directoryHandle;
@@ -909,6 +926,260 @@ function updateMovedImage(image, targetNode, result) {
   image.folderPath = targetNode.fullPath;
   image.pathParts = image.relativePath.split("/");
   image.objectUrl = URL.createObjectURL(result.file);
+  if (state.selectedPaths.delete(oldPath)) state.selectedPaths.add(image.relativePath);
+}
+
+function quickMoveStorageKey() {
+  return state.rootDirectoryHandle ? `barceltool-quick-move-folders:${state.rootDirectoryHandle.name}` : "";
+}
+
+function restoreQuickMoveSlots() {
+  const key = quickMoveStorageKey();
+  let saved = [];
+  try { saved = JSON.parse(localStorage.getItem(key) || "[]"); } catch {}
+  state.quickMoveSlots = Array.from({ length: 6 }, (_, index) => {
+    const path = typeof saved[index] === "string" ? saved[index] : null;
+    return path && findFolderNode(state.folderTree, path) ? path : null;
+  });
+  saveQuickMoveSlots();
+  renderQuickMoveSlots();
+}
+
+function saveQuickMoveSlots() {
+  const key = quickMoveStorageKey();
+  if (!key) return;
+  try { localStorage.setItem(key, JSON.stringify(state.quickMoveSlots)); } catch {}
+}
+
+async function toggleQuickMove() {
+  if (state.quickMoveSession) {
+    await requestQuickMoveExit();
+    return;
+  }
+  await startQuickMove();
+}
+
+async function startQuickMove() {
+  if (elements.previewOverlay.hidden || state.viewingTrash || state.scanning || !state.visibleImages.length || state.operationInProgress) return;
+  if (!(await ensureWritePermission())) return;
+  const startIndex = Math.max(0, state.previewIndex);
+  state.quickMoveSession = new QuickMoveSession(state.visibleImages.slice(), startIndex);
+  elements.previewOverlay.classList.add("quick-move-active");
+  elements.quickMoveStatus.hidden = false;
+  elements.quickMoveLeft.hidden = false;
+  elements.quickMoveRight.hidden = false;
+  elements.quickMoveToggle.classList.add("active");
+  renderQuickMoveSlots();
+  showQuickMoveCurrent();
+}
+
+function showQuickMoveCurrent() {
+  const session = state.quickMoveSession;
+  const entry = session?.currentEntry;
+  if (!session || !entry) return finishQuickMove();
+  const index = state.visibleImages.indexOf(entry.image);
+  if (index >= 0) {
+    state.previewIndex = index;
+    updatePreview();
+  }
+  updateQuickMoveStatus();
+  renderQuickMoveSlots();
+}
+
+function updateQuickMoveStatus() {
+  const session = state.quickMoveSession;
+  if (!session) return;
+  const stats = session.stats;
+  const position = Math.min(stats.processed + 1, stats.total);
+  elements.quickMoveToggle.textContent = `빠른 이동 중 · ${position} / ${stats.total}`;
+  elements.quickMoveProgress.textContent = `${position} / ${stats.total}`;
+  elements.quickMoveStats.textContent = `이동 ${stats.moved} · 이동 안 함 ${stats.skipped} · 실패 ${stats.failed}`;
+}
+
+function renderQuickMoveSlots() {
+  if (!elements.quickMoveLeft || !elements.quickMoveRight) return;
+  elements.quickMoveLeft.replaceChildren();
+  elements.quickMoveRight.replaceChildren();
+  state.quickMoveSlots.forEach((path, index) => {
+    const target = index < 3 ? elements.quickMoveLeft : elements.quickMoveRight;
+    target.appendChild(createQuickMoveSlot(index, path));
+  });
+}
+
+function createQuickMoveSlot(index, path) {
+  const slot = createElement("div", `quick-move-slot${path ? "" : " empty"}`);
+  const shortcut = createElement("span", "quick-move-slot-key", String(index + 1));
+  const action = createElement("button", "quick-move-slot-action");
+  action.type = "button";
+  if (!path) {
+    action.textContent = "+ 폴더 추가";
+    action.addEventListener("click", () => chooseQuickMoveFolder(index));
+  } else {
+    const node = findFolderNode(state.folderTree, path);
+    const leftSide = index < 3;
+    const arrow = createElement("span", "quick-move-slot-arrow", leftSide ? "←" : "→");
+    const name = createElement("span", "quick-move-slot-name", node?.name || path.split("/").pop());
+    if (leftSide) action.append(arrow, name);
+    else action.append(name, arrow);
+    const currentImage = state.quickMoveSession?.currentEntry?.image;
+    action.disabled = !node || Boolean(currentImage && currentImage.folderPath === node.fullPath) || Boolean(state.quickMoveSession?.busy);
+    action.title = path;
+    action.addEventListener("click", () => moveQuickImageToSlot(index));
+    const remove = createElement("button", "quick-move-slot-remove", "×");
+    remove.type = "button";
+    remove.setAttribute("aria-label", `${node?.name || "폴더"} 빠른 이동 버튼 제거`);
+    remove.addEventListener("click", (event) => {
+      event.stopPropagation();
+      state.quickMoveSlots[index] = null;
+      saveQuickMoveSlots();
+      renderQuickMoveSlots();
+    });
+    slot.append(remove);
+  }
+  slot.prepend(shortcut);
+  slot.append(action);
+  return slot;
+}
+
+async function chooseQuickMoveFolder(slotIndex) {
+  if (!state.folderTree || state.quickMoveSession?.busy) return;
+  const body = createElement("div");
+  body.appendChild(createElement("p", "", `${slotIndex + 1}번 빠른 이동 폴더를 선택하세요.`));
+  const picker = createElement("div", "folder-picker");
+  body.appendChild(picker);
+  let targetNode = null;
+  picker.appendChild(createFolderPickerNode(state.folderTree, 0, (node, button) => {
+    targetNode = node;
+    picker.querySelectorAll(".folder-choice.selected").forEach((item) => item.classList.remove("selected"));
+    button.classList.add("selected");
+    setModalActionEnabled("quick-folder-confirm", true);
+  }, true));
+  const confirmed = await showModal({
+    title: "빠른 이동 폴더 추가",
+    body,
+    actions: [
+      { label: "취소", value: null },
+      { id: "quick-folder-confirm", label: "추가", value: true, className: "primary", disabled: true },
+    ],
+  });
+  if (!confirmed || !targetNode) return;
+  state.quickMoveSlots[slotIndex] = targetNode.fullPath;
+  saveQuickMoveSlots();
+  renderQuickMoveSlots();
+}
+
+async function moveQuickImageToSlot(slotIndex) {
+  const session = state.quickMoveSession;
+  const entry = session?.currentEntry;
+  const targetPath = state.quickMoveSlots[slotIndex];
+  const targetNode = findFolderNode(state.folderTree, targetPath);
+  if (!session || !entry || !targetNode || session.busy || entry.image.folderPath === targetNode.fullPath) return;
+  session.busy = true;
+  setQuickMoveBusy(true);
+  try {
+    await imageLoadQueue.enqueue(entry.image, -1);
+    const targetName = await createAvailableName(targetNode.directoryHandle, entry.image.name);
+    const result = await copyThenRemove(entry.image, targetNode.directoryHandle, targetName, false);
+    updateMovedImage(entry.image, targetNode, result);
+    session.completeCurrent("moved");
+  } catch (error) {
+    session.completeCurrent("failed", describeError(error));
+  } finally {
+    session.busy = false;
+    setQuickMoveBusy(false);
+  }
+  if (session.complete) await finishQuickMove();
+  else showQuickMoveCurrent();
+}
+
+function skipQuickMoveImage() {
+  const session = state.quickMoveSession;
+  if (!session || session.busy) return;
+  session.completeCurrent("skipped");
+  if (session.complete) finishQuickMove();
+  else showQuickMoveCurrent();
+}
+
+function setQuickMoveBusy(busy) {
+  elements.previewOverlay.querySelector(".preview-window")?.classList.toggle("quick-move-busy", busy);
+  elements.quickMoveSkip.disabled = busy;
+  elements.quickMoveToggle.disabled = busy;
+  elements.previewRenameButton.disabled = busy;
+  elements.previewFitEnabled.disabled = busy;
+  elements.previewVerticalFitEnabled.disabled = busy;
+  elements.previewWidthSlider.disabled = busy || !state.previewFitEnabled || state.previewVerticalFitEnabled;
+  renderQuickMoveSlots();
+}
+
+async function requestQuickMoveExit() {
+  const session = state.quickMoveSession;
+  if (!session || session.busy) return;
+  const stats = session.stats;
+  const body = createElement("div");
+  body.append(
+    createElement("p", "", "빠른 이동을 종료하시겠습니까?"),
+    createElement("p", "", `처리 완료 ${stats.processed}장`),
+    createElement("p", "", `남은 이미지 ${stats.pending}장`),
+    createElement("p", "modal-path", "이미 이동된 파일은 되돌리지 않습니다."),
+  );
+  const shouldExit = await showModal({
+    title: "빠른 이동 종료",
+    body,
+    actions: [
+      { label: "계속하기", value: false },
+      { label: "종료", value: true, className: "danger" },
+    ],
+  });
+  if (shouldExit) stopQuickMove(false);
+}
+
+function stopQuickMove(closeAfter = false) {
+  const currentImage = state.quickMoveSession?.currentEntry?.image || null;
+  state.quickMoveSession = null;
+  resetQuickMoveUi();
+  updateVisibleImages({ preserveNodes: false });
+  if (closeAfter) {
+    closePreview();
+    return;
+  }
+  const nextIndex = currentImage ? state.visibleImages.indexOf(currentImage) : -1;
+  if (nextIndex >= 0) {
+    state.previewIndex = nextIndex;
+    updatePreview();
+  } else closePreview();
+}
+
+async function finishQuickMove() {
+  const session = state.quickMoveSession;
+  if (!session) return;
+  const stats = session.stats;
+  state.quickMoveSession = null;
+  resetQuickMoveUi();
+  updateVisibleImages({ preserveNodes: false });
+  closePreview();
+  const body = createElement("div");
+  body.append(
+    createElement("p", "", `총 ${stats.total}장`),
+    createElement("p", "", `이동 ${stats.moved}장`),
+    createElement("p", "", `이동 안 함 ${stats.skipped}장`),
+    createElement("p", "", `실패 ${stats.failed}장`),
+  );
+  await showModal({
+    title: "빠른 이동 완료",
+    body,
+    actions: [{ label: "확인", value: true, className: "primary" }],
+  });
+}
+
+function resetQuickMoveUi() {
+  elements.previewOverlay.classList.remove("quick-move-active");
+  elements.previewOverlay.querySelector(".preview-window")?.classList.remove("quick-move-busy");
+  elements.quickMoveStatus.hidden = true;
+  elements.quickMoveLeft.hidden = true;
+  elements.quickMoveRight.hidden = true;
+  elements.quickMoveToggle.classList.remove("active");
+  elements.quickMoveToggle.disabled = false;
+  elements.quickMoveToggle.textContent = "빠른 이동";
 }
 
 function openSelectedPreview() {
@@ -945,6 +1216,7 @@ function updatePreview() {
   cancelPreviewRename();
   elements.previewIndexLabel.textContent = `${state.previewIndex + 1} / ${state.visibleImages.length}`;
   elements.previewFileName.textContent = image.name;
+  elements.quickMoveToggle.disabled = state.viewingTrash || state.scanning || state.operationInProgress || Boolean(state.quickMoveSession?.busy);
   state.selectedPaths.clear();
   state.selectedPaths.add(image.relativePath);
   state.selectionAnchor = state.previewIndex;
@@ -952,6 +1224,10 @@ function updatePreview() {
 }
 
 function closePreview() {
+  if (state.quickMoveSession) {
+    state.quickMoveSession = null;
+    resetQuickMoveUi();
+  }
   cancelPreviewRename();
   elements.previewOverlay.hidden = true;
   elements.previewImage.onload = null;
@@ -961,7 +1237,7 @@ function closePreview() {
 
 function beginPreviewRename() {
   const image = state.visibleImages[state.previewIndex];
-  if (!image || state.operationInProgress || elements.previewCounter.querySelector(".preview-rename-input")) return;
+  if (!image || state.operationInProgress || state.quickMoveSession?.busy || elements.previewCounter.querySelector(".preview-rename-input")) return;
   const extensionWithDot = `.${image.extension}`;
   const baseName = image.name.toLowerCase().endsWith(extensionWithDot.toLowerCase())
     ? image.name.slice(0, -extensionWithDot.length)
@@ -1036,7 +1312,9 @@ function movePreview(offset) {
 }
 
 function handlePreviewOverlayClick(event) {
-  if (event.target === elements.previewOverlay || event.target.classList.contains("preview-stage")) closePreview();
+  if (event.target !== elements.previewOverlay && !event.target.classList.contains("preview-stage")) return;
+  if (state.quickMoveSession) requestQuickMoveExit();
+  else closePreview();
 }
 
 function handleKeyDown(event) {
@@ -1046,12 +1324,23 @@ function handleKeyDown(event) {
   const previewOpen = !elements.previewOverlay.hidden;
   const modalOpen = !elements.modalOverlay.hidden;
   if (event.key === "Escape") {
-    if (previewOpen) closePreview();
+    if (modalOpen) dismissModal();
+    else if (state.quickMoveSession) requestQuickMoveExit();
+    else if (previewOpen) closePreview();
     else if (!elements.contextMenu.hidden) hideContextMenu();
-    else if (modalOpen) dismissModal();
     return;
   }
   if (modalOpen || state.operationInProgress || state.keyboardOperationPending) return;
+  if (state.quickMoveSession && /^[0-6]$/.test(event.key)) {
+    event.preventDefault();
+    if (event.key === "0") skipQuickMoveImage();
+    else {
+      const slotIndex = Number(event.key) - 1;
+      if (state.quickMoveSlots[slotIndex]) moveQuickImageToSlot(slotIndex);
+      else chooseQuickMoveFolder(slotIndex);
+    }
+    return;
+  }
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
     event.preventDefault();
     state.visibleImages.forEach((image) => state.selectedPaths.add(image.relativePath));
@@ -1060,11 +1349,12 @@ function handleKeyDown(event) {
   }
   if (event.code === "Space") {
     event.preventDefault();
+    if (state.quickMoveSession) return;
     if (previewOpen) closePreview(); else openSelectedPreview();
     return;
   }
-  if (previewOpen && event.key === "ArrowLeft") { event.preventDefault(); movePreview(-1); return; }
-  if (previewOpen && event.key === "ArrowRight") { event.preventDefault(); movePreview(1); return; }
+  if (previewOpen && event.key === "ArrowLeft") { event.preventDefault(); if (!state.quickMoveSession) movePreview(-1); return; }
+  if (previewOpen && event.key === "ArrowRight") { event.preventDefault(); if (!state.quickMoveSession) movePreview(1); return; }
   if (!previewOpen && state.selectedPaths.size && (event.key === "Delete" || event.key === "Backspace")) {
     event.preventDefault();
     const selectedImages = getSelectedImages();
