@@ -130,8 +130,8 @@ elements.themeToggle.addEventListener("click", toggleTheme);
 elements.openButtons.forEach((button) => button.addEventListener("click", openFolder));
 elements.refreshButton.addEventListener("click", refreshFolder);
 elements.trashSummary.addEventListener("click", selectTrash);
-elements.moveButton.addEventListener("click", () => openMovePicker());
-elements.trashButton.addEventListener("click", confirmTrash);
+elements.moveButton.addEventListener("click", () => state.viewingTrash ? restoreSelectedTrash() : openMovePicker());
+elements.trashButton.addEventListener("click", () => state.viewingTrash ? confirmPermanentDelete() : confirmTrash());
 elements.imageGrid.addEventListener("click", handleGridClick);
 elements.imageGrid.addEventListener("dblclick", handleGridDoubleClick);
 elements.imageGrid.addEventListener("contextmenu", handleContextMenu);
@@ -711,8 +711,10 @@ function updateToolbar() {
   const count = state.selectedPaths.size;
   elements.selectionCount.hidden = count === 0;
   elements.selectionCount.textContent = `${count.toLocaleString("ko-KR")}개 선택됨`;
-  elements.moveButton.disabled = count === 0 || state.operationInProgress || state.viewingTrash;
-  elements.trashButton.disabled = count === 0 || state.operationInProgress || state.viewingTrash;
+  elements.moveButton.textContent = state.viewingTrash ? "복구" : "이동";
+  elements.trashButton.textContent = state.viewingTrash ? "완전삭제" : "휴지통으로";
+  elements.moveButton.disabled = count === 0 || state.operationInProgress;
+  elements.trashButton.disabled = count === 0 || state.operationInProgress;
   elements.trashSummary.classList.toggle("selected", state.viewingTrash);
   updateDescendantsToggle();
 }
@@ -822,6 +824,19 @@ async function runPermanentDelete(images, { silent = false } = {}) {
   }, "삭제", { silent });
 }
 
+async function restoreSelectedTrash() {
+  if (!state.viewingTrash || !state.selectedPaths.size || state.operationInProgress) return;
+  if (!(await ensureWritePermission())) return;
+  const images = getSelectedImages();
+  await runFileOperation("이미지 복구 중", images, async (image) => {
+    const targetNode = findFolderNode(state.folderTree, image.originalFolderPath) || state.folderTree;
+    const preferredName = image.originalName || image.name;
+    const targetName = await createAvailableName(targetNode.directoryHandle, preferredName);
+    const result = await copyThenRemove(image, targetNode.directoryHandle, targetName, false);
+    restoreTrashImage(image, targetNode, result);
+  }, "복구");
+}
+
 async function runFileOperation(title, images, worker, verb, { silent = false } = {}) {
   setBusy(true);
   if (!silent) {
@@ -870,8 +885,21 @@ function addTrashImage(sourceImage, result) {
     naturalWidth: sourceImage.naturalWidth || 0,
     naturalHeight: sourceImage.naturalHeight || 0,
     isTrashItem: true,
+    originalName: sourceImage.name,
+    originalFolderPath: sourceImage.folderPath,
   });
   state.trashCount = state.trashImages.length;
+}
+
+function restoreTrashImage(image, targetNode, result) {
+  updateMovedImage(image, targetNode, result);
+  state.trashImages = state.trashImages.filter((item) => item !== image);
+  image.isTrashItem = false;
+  delete image.originalName;
+  delete image.originalFolderPath;
+  state.images.push(image);
+  state.trashCount = state.trashImages.length;
+  updateTrashCount();
 }
 
 function updateTrashCount() {
