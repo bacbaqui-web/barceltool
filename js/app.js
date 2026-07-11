@@ -50,6 +50,8 @@ const state = {
   previewVerticalFitEnabled: readSavedPreviewVerticalFitEnabled(),
   quickMoveSession: null,
   quickMoveSlots: [],
+  includeDescendants: readSavedIncludeDescendants(),
+  directImageCounts: new Map(),
 };
 
 const elements = {
@@ -67,6 +69,8 @@ const elements = {
   columnCount: document.querySelector("#columnCount"),
   moveButton: document.querySelector("#moveButton"),
   trashButton: document.querySelector("#trashButton"),
+  includeDescendantsToggle: document.querySelector("#includeDescendantsToggle"),
+  includeDescendantsState: document.querySelector("#includeDescendantsState"),
   imageGrid: document.querySelector("#imageGrid"),
   masonryCanvas: document.querySelector("#masonryCanvas"),
   emptyState: document.querySelector("#emptyState"),
@@ -120,6 +124,7 @@ galleryResizeObserver.observe(elements.imageGrid);
 initializeTheme();
 initializeColumnControl();
 initializePreviewSizeControl();
+initializeDescendantsToggle();
 elements.themeToggle.addEventListener("click", toggleTheme);
 elements.openButtons.forEach((button) => button.addEventListener("click", openFolder));
 elements.refreshButton.addEventListener("click", refreshFolder);
@@ -150,6 +155,40 @@ function readSavedColumnCount() {
     if (Number.isInteger(saved) && saved >= 1 && saved <= 10) return saved;
   } catch {}
   return 4;
+}
+
+function readSavedIncludeDescendants() {
+  try {
+    const saved = localStorage.getItem("barceltool.includeDescendants");
+    if (saved === "false") return false;
+    if (saved === "true") return true;
+  } catch {}
+  return true;
+}
+
+function initializeDescendantsToggle() {
+  elements.includeDescendantsToggle.checked = state.includeDescendants;
+  elements.includeDescendantsToggle.addEventListener("change", () => {
+    if (state.quickMoveSession) {
+      elements.includeDescendantsToggle.checked = state.includeDescendants;
+      return;
+    }
+    state.includeDescendants = elements.includeDescendantsToggle.checked;
+    try { localStorage.setItem("barceltool.includeDescendants", String(state.includeDescendants)); } catch {}
+    clearSelection();
+    closePreview();
+    updateVisibleImages({ resetScroll: true });
+  });
+  updateDescendantsToggle();
+}
+
+function updateDescendantsToggle() {
+  elements.includeDescendantsToggle.checked = state.includeDescendants;
+  elements.includeDescendantsState.textContent = state.includeDescendants ? "ON" : "OFF";
+  elements.includeDescendantsToggle.disabled = Boolean(
+    state.quickMoveSession || state.viewingTrash || state.scanning || state.operationInProgress || !state.folderTree
+  );
+  elements.includeDescendantsToggle.closest(".descendants-toggle")?.classList.toggle("disabled", elements.includeDescendantsToggle.disabled);
 }
 
 function readSavedPreviewWidth() {
@@ -352,12 +391,20 @@ function setScanning(scanning) {
   elements.openButtons.forEach((button) => { button.disabled = scanning || state.operationInProgress; });
   elements.refreshButton.disabled = scanning || state.operationInProgress;
   elements.quickMoveToggle.disabled = scanning || state.viewingTrash || state.operationInProgress;
+  updateDescendantsToggle();
 }
 
 function renderFolderTree() {
   elements.folderTree.replaceChildren();
   if (!state.folderTree) return;
+  calculateDirectImageCounts();
   elements.folderTree.appendChild(createTreeNodeElement(state.folderTree, 0, true));
+}
+
+function calculateDirectImageCounts() {
+  const counts = new Map();
+  state.images.forEach((image) => counts.set(image.folderPath, (counts.get(image.folderPath) || 0) + 1));
+  state.directImageCounts = counts;
 }
 
 function createTreeNodeElement(node, depth, expandedByDefault = false) {
@@ -383,7 +430,10 @@ function createTreeNodeElement(node, depth, expandedByDefault = false) {
   });
   const icon = createElement("span", "folder-icon", "📁");
   const name = createElement("span", "folder-name", node.name);
-  row.append(toggle, icon, name);
+  const directCount = state.directImageCounts.get(node.fullPath) || 0;
+  const count = createElement("span", `folder-image-count${directCount ? "" : " empty"}`, directCount.toLocaleString("ko-KR"));
+  count.title = `이 폴더에 직접 들어 있는 이미지 ${directCount.toLocaleString("ko-KR")}개`;
+  row.append(toggle, icon, name, count);
   row.addEventListener("click", () => selectFolder(node.fullPath));
   row.addEventListener("dragover", (event) => {
     if (!state.dragPaths.length || state.operationInProgress) return;
@@ -425,13 +475,34 @@ function selectTrash() {
 
 function updateVisibleImages({ resetScroll = false, preserveNodes = false } = {}) {
   const prefix = `${state.selectedFolderPath}/`;
-  state.visibleImages = state.viewingTrash
-    ? state.trashImages
-    : state.images.filter((image) => image.relativePath.startsWith(prefix));
+  const directCounts = new Map();
+  const visibleImages = [];
+  state.images.forEach((image) => {
+    directCounts.set(image.folderPath, (directCounts.get(image.folderPath) || 0) + 1);
+    if (state.viewingTrash) return;
+    const matches = state.includeDescendants
+      ? image.relativePath.startsWith(prefix)
+      : image.folderPath === state.selectedFolderPath;
+    if (matches) visibleImages.push(image);
+  });
+  state.directImageCounts = directCounts;
+  state.visibleImages = state.viewingTrash ? state.trashImages : visibleImages;
+  updateFolderImageCountBadges();
   const previousScrollTop = elements.imageGrid.scrollTop;
   renderImageGrid(preserveNodes);
   elements.imageGrid.scrollTop = resetScroll ? 0 : previousScrollTop;
   updateToolbar();
+}
+
+function updateFolderImageCountBadges() {
+  elements.folderTree.querySelectorAll(".tree-row[data-path]").forEach((row) => {
+    const count = state.directImageCounts.get(row.dataset.path) || 0;
+    const badge = row.querySelector(".folder-image-count");
+    if (!badge) return;
+    badge.textContent = count.toLocaleString("ko-KR");
+    badge.classList.toggle("empty", count === 0);
+    badge.title = `이 폴더에 직접 들어 있는 이미지 ${count.toLocaleString("ko-KR")}개`;
+  });
 }
 
 function renderImageGrid(preserveNodes = false) {
@@ -612,11 +683,10 @@ function updateToolbar() {
   if (state.viewingTrash) {
     elements.statusText.textContent = `휴지통 · ${state.visibleImages.length.toLocaleString("ko-KR")}개`;
   } else {
-    const isRoot = state.folderTree && state.selectedFolderPath === state.folderTree.fullPath;
     const folderName = state.selectedFolderPath.split("/").pop() || "폴더";
-    elements.statusText.textContent = isRoot
-      ? `전체 이미지 ${state.visibleImages.length.toLocaleString("ko-KR")}개`
-      : `${folderName} 및 하위 폴더 · ${state.visibleImages.length.toLocaleString("ko-KR")}개`;
+    elements.statusText.textContent = state.includeDescendants
+      ? `${folderName} 및 하위 폴더 · 이미지 ${state.visibleImages.length.toLocaleString("ko-KR")}개`
+      : `${folderName} · 이미지 ${state.visibleImages.length.toLocaleString("ko-KR")}개`;
   }
   const count = state.selectedPaths.size;
   elements.selectionCount.hidden = count === 0;
@@ -624,6 +694,7 @@ function updateToolbar() {
   elements.moveButton.disabled = count === 0 || state.operationInProgress || state.viewingTrash;
   elements.trashButton.disabled = count === 0 || state.operationInProgress || state.viewingTrash;
   elements.trashSummary.classList.toggle("selected", state.viewingTrash);
+  updateDescendantsToggle();
 }
 
 function handleContentBackgroundClick(event) {
@@ -966,6 +1037,7 @@ async function startQuickMove() {
   if (!(await ensureWritePermission())) return;
   const startIndex = Math.max(0, state.previewIndex);
   state.quickMoveSession = new QuickMoveSession(state.visibleImages.slice(), startIndex);
+  updateDescendantsToggle();
   elements.previewOverlay.classList.add("quick-move-active");
   elements.quickMoveStatus.hidden = false;
   elements.quickMoveRight.hidden = false;
@@ -1276,6 +1348,7 @@ function resetQuickMoveUi() {
   elements.quickMoveToggle.disabled = false;
   elements.quickMoveToggle.textContent = "빠른 이동";
   elements.quickMoveUndo.disabled = true;
+  updateDescendantsToggle();
 }
 
 function openSelectedPreview() {
@@ -1510,5 +1583,6 @@ function setBusy(busy) {
   elements.openButtons.forEach((button) => { button.disabled = busy || state.scanning; });
   elements.refreshButton.disabled = busy || state.scanning;
   updateToolbar();
+  updateDescendantsToggle();
 }
 })();
