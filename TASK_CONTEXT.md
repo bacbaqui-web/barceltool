@@ -1,0 +1,187 @@
+# Barceltool 현재 설계 문서
+
+> 이 문서는 GPT에게 현재 프로젝트 상태를 전달하는 단일 기준 문서다. 작업 이력을 누적하지 않고 매 작업마다 현재 코드 기준으로 전체 내용을 교체한다.
+
+## 1. 제품과 최우선 목표
+
+Barceltool은 로컬 이미지 폴더를 빠르게 훑고 관리하는 브라우저 기반 탐색 도구다. 화면 제품명은 `빠툴`, 보조 표기는 `barcel_tool`이다.
+
+현재 설계의 최우선 목표는 이미지 전체 준비가 아니라 **폴더 선택 후 첫 화면이 가장 빠르게 나타나는 것**이다.
+
+- 파일 이름과 경로를 발견하는 즉시 정사각형 placeholder를 표시한다.
+- 모든 이미지의 `File`, Object URL, 비율을 미리 읽지 않는다.
+- 현재 화면과 스크롤 진행 방향의 이미지만 우선 처리한다.
+- 초기 이미지 품질과 완성된 Masonry보다 사용 가능한 첫 화면 속도를 우선한다.
+- 서버, 데이터베이스, 프레임워크, 빌드 과정은 사용하지 않는다.
+- File System Access API를 지원하는 Chrome과 Edge가 대상이다.
+
+## 2. 점진적 초기 렌더링 흐름
+
+```text
+폴더 선택
+→ 디렉터리 엔트리에서 이름·경로·핸들만 수집
+→ 첫 이미지 발견 즉시 1:1 placeholder Masonry 표시
+→ 폴더 탐색은 UI에 양보하며 백그라운드에서 계속
+→ VirtualRenderer가 현재 화면 주변 카드만 생성
+→ 우선순위 Queue가 최대 4개 이미지만 File/비율 처리
+→ createImageBitmap()으로 크기 확인 후 즉시 close()
+→ 지원되지 않는 형식만 Image()로 크기 확인
+→ 확인된 이미지가 속한 Masonry 열만 재배치
+→ 스크롤 방향에 맞춰 다음 이미지 준비
+```
+
+`scanDirectory()`는 파일마다 `getFile()`이나 `URL.createObjectURL()`을 호출하지 않는다. 첫 항목과 64개 단위 중간 결과를 앱에 전달하고 이벤트 루프에 양보한다.
+
+## 3. 이미지 로딩 우선순위
+
+`ImageLoadQueue`의 동시 처리 수는 4개다.
+
+우선순위:
+
+1. 현재 화면과 교차하는 이미지
+2. 화면 아래 500px
+3. 화면 위 500px
+4. 현재 스크롤 방향에 있는 이미지
+5. 나머지 렌더 버퍼 이미지
+
+같은 이미지가 다시 요청되면 작업을 중복 생성하지 않고 기존 대기 작업의 우선순위만 올린다. 새 폴더를 불러오면 대기 Queue를 초기화하고 이전 Object URL을 정리한다.
+
+이미지 로더는 다음 순서로 동작한다.
+
+1. 필요한 시점에 `fileHandle.getFile()` 호출
+2. 가능하면 `createImageBitmap(file)`로 가로·세로 크기 확인
+3. 크기 확인 직후 `bitmap.close()`
+4. Object URL 한 번 생성
+5. bitmap을 지원하지 않는 형식은 `Image()`로 크기 확인
+6. VirtualRenderer의 현재 카드만 실제 `img.src` 연결
+
+## 4. Masonry와 Virtual Scroll
+
+### MasonryLayout
+
+- CSS Grid와 CSS columns를 사용하지 않는다.
+- 초기 미측정 이미지는 1:1 정사각형 비율을 사용한다.
+- 가장 짧은 열에 다음 카드를 배치한다.
+- 각 이미지는 `{ index, column, x, y, width, height, isTruncated }` 위치를 가진다.
+- 열 슬라이더로 1~10열을 지정하며 드래그·휠 조절과 저장을 지원한다.
+- 이미지 비율이 확인되면 해당 이미지가 속한 열과 그 아래 카드만 다시 계산한다.
+- 비율 결과는 80ms 단위로 묶어 레이아웃 갱신 횟수를 줄인다.
+- 창이나 열 개수가 변경될 때만 전체 위치를 다시 계산한다.
+
+### VirtualRenderer
+
+- 현재 화면 위아래 1000px만 렌더링한다.
+- DOM 카드 수는 최대 150개다.
+- 카드 DOM을 풀링해서 재사용한다.
+- 공간 버킷으로 현재 범위의 위치만 조회한다.
+- 스크롤 처리는 `requestAnimationFrame()`으로 합친다.
+- 점진 스캔과 비율 갱신 시 기존 DOM 풀을 유지하고 위치만 바꾼다.
+- `IntersectionObserver`가 화면 근처 이미지에만 실제 `src`를 설정한다.
+
+### Placeholder와 긴 이미지
+
+- 이미지 준비 전에는 라이트·다크 테마에 맞는 shimmer placeholder를 표시한다.
+- `prefers-reduced-motion` 환경에서는 shimmer 애니메이션을 끈다.
+- 세로 비율이 1:3을 넘는 썸네일은 상단부터 1:3 높이까지만 표시한다.
+- 긴 썸네일 하단에는 카드 높이 66%의 그라데이션과 카드 폭 1/3의 둥근 SVG 화살표를 표시한다.
+
+## 5. 탐색과 파일 관리 기능
+
+다음 기능은 점진 로딩과 무관하게 유지한다.
+
+- 중첩 폴더 트리와 폴더 선택
+- 단일 클릭, Ctrl/Cmd, Shift, Ctrl/Cmd+A 선택
+- 경로 기반 선택 상태로 화면 밖 선택 유지
+- Space/더블클릭 미리보기, Escape 닫기, 좌우 이동
+- 상단 버튼, 우클릭, 폴더 트리 드래그를 통한 이동
+- 기본 삭제는 `.barceltool-trash` 이동
+- Shift+Delete/Backspace 영구 삭제
+- 왼쪽 하단 휴지통 보기와 개수 표시
+- 휴지통 이미지 미리보기와 영구 삭제
+- 라이트·다크모드
+
+파일 작업은 지연 이미지 데이터의 `file`이나 Object URL이 아니라 항상 `fileHandle`과 `parentDirectoryHandle`을 기준으로 실행한다.
+
+## 6. 미리보기
+
+- 미측정 이미지를 열면 Queue 최상위 우선순위로 즉시 요청한다.
+- 긴 원본은 내부 세로 스크롤로 전체를 확인한다.
+- 가로맞춤은 기본 690px, 300~1400px 범위와 10px 단위 슬라이더·휠 조절을 지원한다.
+- 세로맞춤을 켜면 이미지 전체를 현재 화면 안에 표시한다.
+- 맞춤 설정은 `localStorage`에 저장한다.
+- 하단 연필 버튼으로 실제 파일명을 수정한다.
+- 파일명 수정은 확장자를 고정하고 복사·크기 검증 후 기존 이름을 제거한다.
+
+## 7. 파일 작업 안전 원칙
+
+1. 대상 쓰기가 끝나기 전에 원본을 삭제하지 않는다.
+2. `write()`와 `close()` 성공 후 대상 파일 크기를 다시 확인한다.
+3. 검증이 끝난 뒤에만 원본을 삭제한다.
+4. 실패 시 원본을 유지한다.
+5. 사용자 동의 없이 같은 이름 파일을 덮어쓰지 않는다.
+6. 실제 성공한 항목만 내부 데이터에 반영한다.
+7. 한 항목 실패가 다중 작업 전체를 중단하지 않는다.
+8. 기본 삭제는 자체 휴지통 이동이다.
+9. 파일 변경 전 읽기·쓰기 권한을 확인한다.
+10. 작업 중 중복 변경 명령을 차단한다.
+
+## 8. 핵심 데이터 구조
+
+초기 이미지 레코드는 무거운 필드를 비운 상태로 생성된다.
+
+```js
+{
+  file: null,
+  fileHandle,
+  parentDirectoryHandle,
+  name,
+  extension,
+  relativePath,
+  folderPath,
+  pathParts,
+  objectUrl: null,
+  naturalWidth: undefined,
+  naturalHeight: undefined,
+  layout
+}
+```
+
+화면 근처에서 필요해질 때만 `file`, `objectUrl`, `naturalWidth`, `naturalHeight`를 채운다.
+
+## 9. 파일 구조
+
+```text
+barceltool/
+├─ index.html
+├─ style.css
+├─ TASK_CONTEXT.md
+├─ assets/
+│  └─ barcel-avatar.png
+└─ js/
+   ├─ app.js
+   ├─ file-system.js
+   ├─ masonry.js
+   └─ modal.js
+```
+
+- `file-system.js`: 메타데이터 우선 점진 스캔, 권한, 이동·삭제
+- `masonry.js`: `MasonryLayout`, `VirtualRenderer`, `ImageLoadQueue`
+- `app.js`: 점진 스캔 화면 반영, 지연 이미지 로더, 기존 기능 연결
+- `modal.js`: 확인·충돌·진행·결과 모달
+
+각 파일은 IIFE로 격리하고 공유 기능만 `window.BarcelFileSystem`, `window.BarcelMasonry`, `window.BarcelModal`로 노출한다.
+
+## 10. 남은 병목과 향후 최적화
+
+- File System Access API의 디렉터리 엔트리 열거 시간 자체는 브라우저와 저장장치 성능에 영향을 받는다.
+- 3만 개 메타데이터와 Object URL이 생성된 화면 근처 데이터는 메모리에 남는다.
+- 현재 비율 캐시가 없어 폴더를 다시 열면 화면 근처 비율을 다시 읽는다.
+- 다음 단계로 IndexedDB에 `경로 + 수정 시각 + 크기 + 비율` 캐시를 저장할 수 있다.
+- 실제 1천·5천·3만 장 폴더에서 첫 placeholder 표시 시간과 스크롤 프레임을 별도로 프로파일링해야 한다.
+- 파일 시스템 엔트리 열거를 Web Worker로 옮길 수는 없으므로 메인 스레드 양보 주기를 계속 조정해야 한다.
+
+## 11. 문서 관리 규칙
+
+- 새 작업마다 이 문서 전체를 현재 코드 기준으로 다시 작성한다.
+- 과거 변경 내역을 누적하지 않는다.
+- GPT가 이 파일 하나로 현재 목표, 안전 조건, 병목과 확장 지점을 이해할 수 있어야 한다.

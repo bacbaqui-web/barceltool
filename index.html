@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>빠툴 · barcel_tool</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="toolbar">
+        <div class="brand">
+          <img class="brand-avatar" src="./assets/barcel-avatar.png" alt="" />
+          <span>빠툴</span>
+          <span class="brand-subtitle">barcel_tool</span>
+        </div>
+        <div class="toolbar-actions">
+          <button id="themeToggle" class="theme-toggle" type="button" aria-label="다크 모드로 전환" aria-pressed="false">
+            <span class="theme-icon" aria-hidden="true">☾</span>
+            <span class="theme-label">다크 모드</span>
+          </button>
+          <button id="refreshButton" class="secondary-button" type="button" hidden>폴더 새로고침</button>
+          <button class="load-button" data-action="open-folder" type="button">폴더 불러오기</button>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <aside class="folder-panel" aria-label="폴더 트리">
+          <div class="panel-heading">폴더</div>
+          <nav id="folderTree" class="folder-tree"></nav>
+          <button id="trashSummary" class="trash-summary" type="button" aria-label="휴지통 보기">
+            <span class="trash-summary-icon" aria-hidden="true">🗑️</span>
+            <span class="trash-summary-label">휴지통</span>
+            <span id="trashCount" class="trash-count">0</span>
+          </button>
+        </aside>
+
+        <section id="contentPanel" class="content-panel">
+          <div id="contentHeader" class="content-header" hidden>
+            <h1 id="statusText"></h1>
+            <div class="content-actions">
+              <span id="selectionCount" class="selection-count" hidden></span>
+              <label class="column-control" for="columnSlider" title="드래그하거나 마우스 휠로 열 개수를 조절할 수 있습니다.">
+                <span class="column-control-label">열</span>
+                <input id="columnSlider" type="range" min="1" max="10" step="1" value="4" />
+                <output id="columnCount" for="columnSlider">4</output>
+              </label>
+              <button id="moveButton" class="secondary-button" type="button" disabled>이동</button>
+              <button id="trashButton" class="danger-ghost-button" type="button" disabled>휴지통으로</button>
+            </div>
+          </div>
+          <div id="imageGrid" class="image-grid" aria-label="이미지 목록">
+            <div id="masonryCanvas" class="masonry-canvas"></div>
+          </div>
+          <div id="emptyState" class="empty-state">
+            <div class="empty-icon" aria-hidden="true">▧</div>
+            <h1>이미지 폴더를 한눈에 둘러보세요</h1>
+            <p>폴더를 불러오면 안에 있는 모든 이미지를 한 번에 볼 수 있습니다.</p>
+            <button class="load-button load-button-large" data-action="open-folder" type="button">폴더 불러오기</button>
+            <span>파일은 업로드되지 않고 이 브라우저에서만 처리됩니다.</span>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="contextMenu" class="context-menu" hidden>
+      <button type="button" data-command="preview">미리보기</button>
+      <button type="button" data-command="move">이동</button>
+      <button type="button" data-command="trash">휴지통으로</button>
+      <div class="menu-separator"></div>
+      <button class="danger-menu-item" type="button" data-command="delete">영구 삭제</button>
+    </div>
+
+    <div id="modalOverlay" class="modal-overlay" hidden>
+      <section id="modalDialog" class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+        <h2 id="modalTitle"></h2>
+        <div id="modalBody" class="modal-body"></div>
+        <div id="modalActions" class="modal-actions"></div>
+      </section>
+    </div>
+
+    <div id="previewOverlay" class="preview-overlay" role="dialog" aria-modal="true" aria-label="이미지 미리보기" hidden>
+      <div class="preview-window">
+        <div class="preview-info">
+          <div id="previewPath" class="preview-path"></div>
+          <div class="preview-size-control" title="미리보기 이미지 가로폭을 드래그하거나 마우스 휠로 조절할 수 있습니다.">
+            <label class="preview-fit-toggle" for="previewFitEnabled">
+              <input id="previewFitEnabled" type="checkbox" checked />
+              <span>가로맞춤</span>
+            </label>
+            <input id="previewWidthSlider" type="range" min="300" max="1400" step="10" value="690" aria-label="미리보기 이미지 가로폭" />
+            <output id="previewWidthValue" for="previewWidthSlider">690px</output>
+            <label class="preview-fit-toggle" for="previewVerticalFitEnabled">
+              <input id="previewVerticalFitEnabled" type="checkbox" />
+              <span>세로맞춤</span>
+            </label>
+          </div>
+          <span id="previewBadge" class="extension-badge"></span>
+        </div>
+        <div class="preview-stage">
+          <img id="previewImage" alt="" />
+        </div>
+        <div id="previewCounter" class="preview-counter">
+          <span id="previewIndexLabel" class="preview-index-label"></span>
+          <span class="preview-counter-separator">·</span>
+          <span id="previewFileName" class="preview-file-name"></span>
+          <button id="previewRenameButton" class="preview-rename-button" type="button" aria-label="파일 이름 수정" title="파일 이름 수정">✎</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="./js/file-system.js"></script>
+    <script src="./js/modal.js"></script>
+    <script src="./js/masonry.js"></script>
+    <script src="./js/app.js"></script>
+  </body>
+</html>
