@@ -101,14 +101,21 @@
         <div id="quickMoveStatus" class="quick-move-status" hidden>
           <span id="quickMoveProgress" class="quick-move-progress"></span>
           <span id="quickMoveStats" class="quick-move-stats"></span>
-          <button id="quickMoveSkip" class="quick-move-skip" type="button">0 · 이동 안 함</button>
-          <button id="quickMoveUndo" class="quick-move-undo" type="button" disabled>Backspace · 되돌리기</button>
         </div>
         <div class="preview-stage">
           <img id="previewImage" alt="" />
         </div>
-        <div id="quickMoveLeft" class="quick-move-rail quick-move-left" hidden></div>
-        <div id="quickMoveRight" class="quick-move-rail quick-move-right" hidden></div>
+        <div id="quickMoveRight" class="quick-move-rail quick-move-right" hidden>
+          <button id="quickMoveSkip" class="quick-move-slot quick-move-command" type="button">
+            <span class="quick-move-slot-key">0</span>
+            <span>이동 안 함</span>
+          </button>
+          <button id="quickMoveUndo" class="quick-move-slot quick-move-command" type="button" disabled>
+            <span class="quick-move-slot-key quick-move-backspace-key">Backspace</span>
+            <span>되돌리기</span>
+          </button>
+          <div id="quickMoveFolderSlots" class="quick-move-folder-slots"></div>
+        </div>
         <div id="previewCounter" class="preview-counter">
           <span id="previewIndexLabel" class="preview-index-label"></span>
           <span class="preview-counter-separator">·</span>

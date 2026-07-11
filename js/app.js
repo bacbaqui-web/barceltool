@@ -49,7 +49,7 @@ const state = {
   previewFitEnabled: readSavedPreviewFitEnabled(),
   previewVerticalFitEnabled: readSavedPreviewVerticalFitEnabled(),
   quickMoveSession: null,
-  quickMoveSlots: new Array(6).fill(null),
+  quickMoveSlots: [],
 };
 
 const elements = {
@@ -89,8 +89,8 @@ const elements = {
   quickMoveStats: document.querySelector("#quickMoveStats"),
   quickMoveSkip: document.querySelector("#quickMoveSkip"),
   quickMoveUndo: document.querySelector("#quickMoveUndo"),
-  quickMoveLeft: document.querySelector("#quickMoveLeft"),
   quickMoveRight: document.querySelector("#quickMoveRight"),
+  quickMoveFolderSlots: document.querySelector("#quickMoveFolderSlots"),
   modalOverlay: document.querySelector("#modalOverlay"),
 };
 
@@ -292,7 +292,7 @@ async function loadFromHandle(preferredFolderPath) {
     state.visibleImages = [];
     state.folderTree = null;
     state.viewingTrash = false;
-    state.quickMoveSlots = new Array(6).fill(null);
+    state.quickMoveSlots = [];
     renderQuickMoveSlots();
     clearSelection();
     closePreview();
@@ -940,10 +940,9 @@ function restoreQuickMoveSlots() {
   const key = quickMoveStorageKey();
   let saved = [];
   try { saved = JSON.parse(localStorage.getItem(key) || "[]"); } catch {}
-  state.quickMoveSlots = Array.from({ length: 6 }, (_, index) => {
-    const path = typeof saved[index] === "string" ? saved[index] : null;
-    return path && findFolderNode(state.folderTree, path) ? path : null;
-  });
+  state.quickMoveSlots = saved
+    .filter((path) => typeof path === "string" && findFolderNode(state.folderTree, path))
+    .slice(0, 9);
   saveQuickMoveSlots();
   renderQuickMoveSlots();
 }
@@ -969,7 +968,6 @@ async function startQuickMove() {
   state.quickMoveSession = new QuickMoveSession(state.visibleImages.slice(), startIndex);
   elements.previewOverlay.classList.add("quick-move-active");
   elements.quickMoveStatus.hidden = false;
-  elements.quickMoveLeft.hidden = false;
   elements.quickMoveRight.hidden = false;
   elements.quickMoveToggle.classList.add("active");
   renderQuickMoveSlots();
@@ -1001,13 +999,14 @@ function updateQuickMoveStatus() {
 }
 
 function renderQuickMoveSlots() {
-  if (!elements.quickMoveLeft || !elements.quickMoveRight) return;
-  elements.quickMoveLeft.replaceChildren();
-  elements.quickMoveRight.replaceChildren();
+  if (!elements.quickMoveFolderSlots) return;
+  elements.quickMoveFolderSlots.replaceChildren();
   state.quickMoveSlots.forEach((path, index) => {
-    const target = index < 3 ? elements.quickMoveLeft : elements.quickMoveRight;
-    target.appendChild(createQuickMoveSlot(index, path));
+    elements.quickMoveFolderSlots.appendChild(createQuickMoveSlot(index, path));
   });
+  if (state.quickMoveSlots.length < 9) {
+    elements.quickMoveFolderSlots.appendChild(createQuickMoveSlot(state.quickMoveSlots.length, null));
+  }
 }
 
 function createQuickMoveSlot(index, path) {
@@ -1020,11 +1019,9 @@ function createQuickMoveSlot(index, path) {
     action.addEventListener("click", () => chooseQuickMoveFolder(index));
   } else {
     const node = findFolderNode(state.folderTree, path);
-    const leftSide = index < 3;
-    const arrow = createElement("span", "quick-move-slot-arrow", leftSide ? "←" : "→");
+    const arrow = createElement("span", "quick-move-slot-arrow", "→");
     const name = createElement("span", "quick-move-slot-name", node?.name || path.split("/").pop());
-    if (leftSide) action.append(arrow, name);
-    else action.append(name, arrow);
+    action.append(name, arrow);
     const currentImage = state.quickMoveSession?.currentEntry?.image;
     action.disabled = !node || Boolean(currentImage && currentImage.folderPath === node.fullPath) || Boolean(state.quickMoveSession?.busy);
     action.title = path;
@@ -1034,7 +1031,7 @@ function createQuickMoveSlot(index, path) {
     remove.setAttribute("aria-label", `${node?.name || "폴더"} 빠른 이동 버튼 제거`);
     remove.addEventListener("click", (event) => {
       event.stopPropagation();
-      state.quickMoveSlots[index] = null;
+      state.quickMoveSlots.splice(index, 1);
       saveQuickMoveSlots();
       renderQuickMoveSlots();
     });
@@ -1104,7 +1101,7 @@ async function chooseQuickMoveFolder(slotIndex) {
       const fullPath = `${targetNode.fullPath}/${folderName}`;
       const newNode = { name: folderName, fullPath, directoryHandle, children: new Map() };
       targetNode.children.set(folderName, newNode);
-      state.quickMoveSlots[slotIndex] = fullPath;
+      state.quickMoveSlots.splice(slotIndex, 0, fullPath);
       saveQuickMoveSlots();
       renderFolderTree();
       renderQuickMoveSlots();
@@ -1131,7 +1128,7 @@ async function chooseQuickMoveFolder(slotIndex) {
   });
   if (confirmed === "created") return;
   if (!confirmed || !targetNode) return;
-  state.quickMoveSlots[slotIndex] = targetNode.fullPath;
+  state.quickMoveSlots.splice(slotIndex, 0, targetNode.fullPath);
   saveQuickMoveSlots();
   renderQuickMoveSlots();
 }
@@ -1274,7 +1271,6 @@ function resetQuickMoveUi() {
   elements.previewOverlay.classList.remove("quick-move-active");
   elements.previewOverlay.querySelector(".preview-window")?.classList.remove("quick-move-busy");
   elements.quickMoveStatus.hidden = true;
-  elements.quickMoveLeft.hidden = true;
   elements.quickMoveRight.hidden = true;
   elements.quickMoveToggle.classList.remove("active");
   elements.quickMoveToggle.disabled = false;
@@ -1431,13 +1427,13 @@ function handleKeyDown(event) {
     return;
   }
   if (modalOpen || state.operationInProgress || state.keyboardOperationPending) return;
-  if (state.quickMoveSession && /^[0-6]$/.test(event.key)) {
+  if (state.quickMoveSession && /^[0-9]$/.test(event.key)) {
     event.preventDefault();
     if (event.key === "0") skipQuickMoveImage();
     else {
       const slotIndex = Number(event.key) - 1;
       if (state.quickMoveSlots[slotIndex]) moveQuickImageToSlot(slotIndex);
-      else chooseQuickMoveFolder(slotIndex);
+      else if (slotIndex === state.quickMoveSlots.length && slotIndex < 9) chooseQuickMoveFolder(slotIndex);
     }
     return;
   }
