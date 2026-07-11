@@ -53,6 +53,9 @@ const state = {
   includeDescendants: readSavedIncludeDescendants(),
   directImageCounts: new Map(),
   descendantImageCounts: new Map(),
+  sortMode: "name",
+  sortAscending: true,
+  randomSeed: createRandomSeed(),
 };
 
 const elements = {
@@ -72,6 +75,8 @@ const elements = {
   trashButton: document.querySelector("#trashButton"),
   includeDescendantsToggle: document.querySelector("#includeDescendantsToggle"),
   includeDescendantsState: document.querySelector("#includeDescendantsState"),
+  sortMode: document.querySelector("#sortMode"),
+  sortDirectionButton: document.querySelector("#sortDirectionButton"),
   imageGrid: document.querySelector("#imageGrid"),
   masonryCanvas: document.querySelector("#masonryCanvas"),
   emptyState: document.querySelector("#emptyState"),
@@ -126,6 +131,7 @@ initializeTheme();
 initializeColumnControl();
 initializePreviewSizeControl();
 initializeDescendantsToggle();
+initializeSortControls();
 elements.themeToggle.addEventListener("click", toggleTheme);
 elements.openButtons.forEach((button) => button.addEventListener("click", openFolder));
 elements.refreshButton.addEventListener("click", refreshFolder);
@@ -165,6 +171,125 @@ function readSavedIncludeDescendants() {
     if (saved === "true") return true;
   } catch {}
   return true;
+}
+
+function createRandomSeed() {
+  return Math.floor(Math.random() * 0xFFFFFFFF) >>> 0;
+}
+
+function initializeSortControls() {
+  elements.sortMode.addEventListener("change", () => {
+    if (state.quickMoveSession) return updateSortControls();
+    state.sortMode = elements.sortMode.value;
+    if (state.sortMode === "random") state.randomSeed = createRandomSeed();
+    saveSortSettings();
+    applySortChange();
+  });
+  elements.sortDirectionButton.addEventListener("click", () => {
+    if (state.quickMoveSession) return;
+    if (state.sortMode === "random") state.randomSeed = createRandomSeed();
+    else state.sortAscending = !state.sortAscending;
+    saveSortSettings();
+    applySortChange();
+  });
+  updateSortControls();
+}
+
+function restoreSortSettingsForRoot(rootName) {
+  let savedRoot = null;
+  let savedMode = null;
+  let savedAscending = null;
+  let savedSeed = null;
+  try {
+    savedRoot = localStorage.getItem("barceltool.sortRoot");
+    savedMode = localStorage.getItem("barceltool.sortMode");
+    savedAscending = localStorage.getItem("barceltool.ascending");
+    savedSeed = Number(localStorage.getItem("barceltool.randomSeed"));
+  } catch {}
+  const validModes = new Set(["name", "date", "resolution", "random"]);
+  if (savedRoot === rootName && validModes.has(savedMode)) {
+    state.sortMode = savedMode;
+    state.sortAscending = savedAscending !== "false";
+    state.randomSeed = Number.isInteger(savedSeed) && savedSeed >= 0 ? savedSeed >>> 0 : createRandomSeed();
+  } else {
+    state.sortMode = "name";
+    state.sortAscending = true;
+    state.randomSeed = createRandomSeed();
+  }
+  saveSortSettings();
+  updateSortControls();
+}
+
+function saveSortSettings() {
+  try {
+    localStorage.setItem("barceltool.sortRoot", state.rootDirectoryHandle?.name || "");
+    localStorage.setItem("barceltool.sortMode", state.sortMode);
+    localStorage.setItem("barceltool.ascending", String(state.sortAscending));
+    localStorage.setItem("barceltool.randomSeed", String(state.randomSeed));
+  } catch {}
+}
+
+function updateSortControls() {
+  const disabled = Boolean(state.quickMoveSession || state.scanning || state.operationInProgress || !state.folderTree);
+  elements.sortMode.value = state.sortMode;
+  elements.sortMode.disabled = disabled;
+  elements.sortDirectionButton.disabled = disabled;
+  const random = state.sortMode === "random";
+  elements.sortDirectionButton.textContent = random ? "↻" : state.sortAscending ? "↑" : "↓";
+  elements.sortDirectionButton.title = random ? "다시 섞기" : state.sortAscending ? "오름차순" : "내림차순";
+  elements.sortDirectionButton.setAttribute("aria-label", random
+    ? "이미지 순서 다시 섞기"
+    : state.sortAscending ? "내림차순으로 변경" : "오름차순으로 변경");
+}
+
+function applySortChange() {
+  clearSelection();
+  closePreview();
+  updateVisibleImages({ resetScroll: true });
+  updateSortControls();
+}
+
+function sortImages(images) {
+  const sorted = images.slice();
+  if (state.sortMode === "random") return shuffleWithSeed(sorted, state.randomSeed);
+  const direction = state.sortAscending ? 1 : -1;
+  sorted.sort((left, right) => {
+    let comparison = 0;
+    if (state.sortMode === "name") comparison = compareImageNames(left, right);
+    if (state.sortMode === "date") comparison = getImageLastModified(left) - getImageLastModified(right);
+    if (state.sortMode === "resolution") comparison = getImageResolution(left) - getImageResolution(right);
+    return comparison ? comparison * direction : compareImageNames(left, right);
+  });
+  return sorted;
+}
+
+function compareImageNames(left, right) {
+  const byName = left.name.localeCompare(right.name, "ko", { numeric: true, sensitivity: "base" });
+  return byName || left.relativePath.localeCompare(right.relativePath, "ko", { numeric: true, sensitivity: "base" });
+}
+
+function getImageLastModified(image) {
+  return image.file?.lastModified || image.lastModified || 0;
+}
+
+function getImageResolution(image) {
+  return (image.naturalWidth || 0) * (image.naturalHeight || 0);
+}
+
+function shuffleWithSeed(items, seed) {
+  let value = seed >>> 0;
+  const random = () => {
+    value += 0x6D2B79F5;
+    let result = value;
+    result = Math.imul(result ^ result >>> 15, result | 1);
+    result ^= result + Math.imul(result ^ result >>> 7, result | 61);
+    return ((result ^ result >>> 14) >>> 0) / 4294967296;
+  };
+  for (let index = items.length - 1; index > 0; index -= 1) {
+    const target = Math.floor(random() * (index + 1));
+    [items[index], items[target]] = [items[target], items[index]];
+  }
+  return items;
 }
 
 function initializeDescendantsToggle() {
@@ -309,6 +434,7 @@ async function openFolder() {
     const handle = await window.showDirectoryPicker({ mode: "readwrite" });
     if (!(await verifyPermission(handle, true))) return showPermissionMessage();
     state.rootDirectoryHandle = handle;
+    restoreSortSettingsForRoot(handle.name);
     await loadFromHandle("");
   } catch (error) {
     if (error.name !== "AbortError") await showInfo("폴더를 열 수 없습니다", describeError(error));
@@ -394,6 +520,7 @@ function setScanning(scanning) {
   elements.refreshButton.disabled = scanning || state.operationInProgress;
   elements.quickMoveToggle.disabled = scanning || state.viewingTrash || state.operationInProgress;
   updateDescendantsToggle();
+  updateSortControls();
 }
 
 function renderFolderTree() {
@@ -506,7 +633,7 @@ function updateVisibleImages({ resetScroll = false, preserveNodes = false } = {}
     if (matches) visibleImages.push(image);
   });
   calculateFolderImageCounts();
-  state.visibleImages = state.viewingTrash ? state.trashImages : visibleImages;
+  state.visibleImages = sortImages(state.viewingTrash ? state.trashImages : visibleImages);
   updateFolderImageCountBadges();
   const previousScrollTop = elements.imageGrid.scrollTop;
   renderImageGrid(preserveNodes);
@@ -629,6 +756,7 @@ async function loadImageResource(image) {
     throw error;
   }
   image.file = file;
+  image.lastModified = file.lastModified;
   image.objectUrl = objectUrl;
   image.naturalWidth = width || 1;
   image.naturalHeight = height || 1;
@@ -717,6 +845,7 @@ function updateToolbar() {
   elements.trashButton.disabled = count === 0 || state.operationInProgress;
   elements.trashSummary.classList.toggle("selected", state.viewingTrash);
   updateDescendantsToggle();
+  updateSortControls();
 }
 
 function handleContentBackgroundClick(event) {
@@ -1041,6 +1170,7 @@ function updateMovedImage(image, targetNode, result) {
   const oldPath = image.relativePath;
   if (image.objectUrl) URL.revokeObjectURL(image.objectUrl);
   image.file = result.file;
+  image.lastModified = result.file.lastModified;
   image.fileHandle = result.fileHandle;
   image.parentDirectoryHandle = targetNode.directoryHandle;
   image.name = result.targetName;
@@ -1086,6 +1216,7 @@ async function startQuickMove() {
   const startIndex = Math.max(0, state.previewIndex);
   state.quickMoveSession = new QuickMoveSession(state.visibleImages.slice(), startIndex);
   updateDescendantsToggle();
+  updateSortControls();
   elements.previewOverlay.classList.add("quick-move-active");
   elements.quickMoveStatus.hidden = false;
   elements.quickMoveRight.hidden = false;
@@ -1397,6 +1528,7 @@ function resetQuickMoveUi() {
   elements.quickMoveToggle.textContent = "빠른 이동";
   elements.quickMoveUndo.disabled = true;
   updateDescendantsToggle();
+  updateSortControls();
 }
 
 function openSelectedPreview() {
@@ -1508,12 +1640,15 @@ async function renamePreviewImage(image, requestedBaseName) {
     const result = await copyThenRemove(image, image.parentDirectoryHandle, newName, false);
     URL.revokeObjectURL(image.objectUrl);
     image.file = result.file;
+    image.lastModified = result.file.lastModified;
     image.fileHandle = result.fileHandle;
     image.name = result.targetName;
     image.relativePath = `${image.folderPath}/${result.targetName}`;
     image.pathParts = image.relativePath.split("/");
     image.objectUrl = URL.createObjectURL(result.file);
     if (state.selectedPaths.delete(oldPath)) state.selectedPaths.add(image.relativePath);
+    state.visibleImages = sortImages(state.visibleImages);
+    state.previewIndex = state.visibleImages.indexOf(image);
     calculateAndRenderMasonry();
     updatePreview();
   } catch (error) {
@@ -1632,5 +1767,6 @@ function setBusy(busy) {
   elements.refreshButton.disabled = busy || state.scanning;
   updateToolbar();
   updateDescendantsToggle();
+  updateSortControls();
 }
 })();

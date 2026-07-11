@@ -96,6 +96,13 @@ Barceltool은 로컬 이미지 폴더를 빠르게 훑고 관리하는 브라우
 - 토글 ON은 선택 경로 접두사, OFF는 `folderPath`의 정확한 일치로 메모리의 이미지 데이터만 필터링한다.
 - 토글 변경 시 선택을 해제하고 스크롤을 맨 위로 옮긴 뒤 기존 Masonry와 VirtualRenderer에 새 `visibleImages`를 전달한다.
 - 토글은 `barceltool.includeDescendants` 키로 `localStorage`에 저장하며 저장값이 없으면 ON이다.
+- 오른쪽 제목줄에서 이름·최신·크기(해상도)·무작위 정렬을 선택한다.
+- 이름은 `localeCompare()`의 한글·숫자 자연 정렬, 최신은 메모리에 로드된 `File.lastModified`, 크기는 `naturalWidth × naturalHeight`를 사용한다.
+- 날짜와 해상도 정렬은 초기 속도를 해치지 않도록 정렬을 위해 파일을 추가로 읽지 않으며, 아직 로드되지 않은 값은 0으로 취급하고 파일명으로 순서를 안정화한다.
+- 이름·최신·크기는 ↑/↓ 한 버튼으로 방향을 바꾸고, 무작위에서는 ↻ 버튼으로 새 시드를 만들어 다시 섞는다.
+- 무작위는 저장된 시드로 Fisher–Yates를 실행하므로 Masonry 재계산만으로 순서가 바뀌지 않는다.
+- 정렬 변경은 새 `visibleImages`를 기존 Masonry와 VirtualRenderer에 전달하고 스크롤을 맨 위로 이동한다.
+- `barceltool.sortMode`, `barceltool.ascending`, `barceltool.randomSeed`, `barceltool.sortRoot`를 저장한다. 같은 루트는 설정을 복원하고 다른 루트를 처음 열면 이름 오름차순으로 초기화한다.
 - 단일 클릭, Ctrl/Cmd, Shift, Ctrl/Cmd+A 선택
 - 경로 기반 선택 상태로 화면 밖 선택 유지
 - Space/더블클릭 미리보기, Escape 닫기, 좌우 이동
@@ -125,7 +132,7 @@ Barceltool은 로컬 이미지 폴더를 빠르게 훑고 관리하는 브라우
 
 미리보기가 열린 일반 이미지 목록에서 빠른 이동을 시작할 수 있다. 시작 시점의 `visibleImages`를 별도 `QuickMoveSession` 대기열로 복사하며 현재 이미지부터 끝까지 진행한 뒤 앞부분으로 순환한다.
 
-빠른 이동 대기열에는 시작 당시 `하위 폴더 포함` 상태가 반영된 목록이 복사된다. 세션 중에는 토글을 잠그고 종료 후 다시 활성화한다.
+빠른 이동 대기열에는 시작 당시 `하위 폴더 포함` 상태와 화면 정렬이 반영된 목록이 복사된다. 세션 중에는 폴더 포함 토글과 정렬 UI를 잠그고 종료 후 다시 활성화한다.
 
 각 대기열 항목:
 

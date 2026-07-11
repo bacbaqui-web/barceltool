@@ -95,6 +95,10 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .content-header { min-height: 47px; flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 7px 20px; border-bottom: 1px solid var(--border); background: #fafbfc; }
 .content-header h1 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 650; }
 .selection-count { color: #256cc5; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.sort-control { height: 32px; display: flex; align-items: stretch; overflow: hidden; border: 1px solid #cbd1d9; border-radius: 6px; background: #fff; }
+.sort-control select { min-width: 72px; padding: 0 24px 0 9px; color: #39414c; border: 0; outline: 0; background: transparent; font-size: 11px; font-weight: 650; cursor: pointer; }
+.sort-control button { width: 32px; padding: 0; color: #256cc5; border: 0; border-left: 1px solid #d9dde3; background: transparent; font-size: 16px; font-weight: 750; }
+.sort-control button:not(:disabled):hover { background: #f0f2f5; }
 .column-control { height: 32px; display: flex; align-items: center; gap: 7px; padding: 0 9px; color: #59616c; border: 1px solid #cbd1d9; border-radius: 6px; background: #fff; user-select: none; }
 .column-control-label { font-size: 11px; font-weight: 700; }
 .column-control input { width: 86px; height: 16px; margin: 0; accent-color: var(--accent); cursor: ew-resize; }
@@ -291,6 +295,10 @@ html[data-theme="dark"] .content-header h1 { color: var(--text); }
 html[data-theme="dark"] .selection-count { color: #83b6f2; }
 html[data-theme="dark"] .column-control { color: #c2c8d0; border-color: #4b515b; background: #2b2f36; }
 html[data-theme="dark"] .column-control output { color: #8dbcf5; }
+html[data-theme="dark"] .sort-control { border-color: #4b515b; background: #2b2f36; }
+html[data-theme="dark"] .sort-control select { color: #dde1e7; }
+html[data-theme="dark"] .sort-control button { color: #8dbcf5; border-left-color: #4b515b; }
+html[data-theme="dark"] .sort-control button:not(:disabled):hover { background: #363b43; }
 html[data-theme="dark"] .folder-image-count { color: #aab2bd; }
 html[data-theme="dark"] .folder-image-count.empty { color: #68717d; }
 html[data-theme="dark"] .descendants-toggle { color: #c2c8d0; border-color: #4b515b; background: #2b2f36; }
@@ -339,6 +347,7 @@ html[data-theme="dark"] .folder-choice.selected { color: #9ac5f8; background: #2
 @media (max-width: 850px) {
   .column-control-label { display: none; }
   .column-control input { width: 62px; }
+  .sort-control select { min-width: 64px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
