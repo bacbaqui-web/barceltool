@@ -351,6 +351,7 @@ async function loadFromHandle(preferredFolderPath) {
       if (shouldRenderTree) renderFolderTree();
       updateVisibleImages({ resetScroll, preserveNodes: firstPaintDone && !resetScroll });
       elements.emptyState.hidden = true;
+      elements.imageGrid.hidden = false;
       elements.contentHeader.hidden = false;
       elements.refreshButton.hidden = false;
     };
