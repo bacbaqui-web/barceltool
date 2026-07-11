@@ -24,10 +24,11 @@ Barceltool은 로컬 이미지 폴더를 빠르게 훑고 관리하는 브라우
 → 폴더 탐색은 UI에 양보하며 백그라운드에서 계속
 → VirtualRenderer가 현재 화면 주변 카드만 생성
 → 우선순위 Queue가 최대 4개 이미지만 File/비율 처리
-→ createImageBitmap()으로 크기 확인 후 즉시 close()
-→ 지원되지 않는 형식만 Image()로 크기 확인
+→ PNG·JPEG·WEBP·GIF·BMP·SVG는 가능한 경우 파일 헤더에서 크기 확인
+→ 헤더 분석이 불가능한 형식만 createImageBitmap()/Image()로 확인
 → 확인된 이미지가 속한 Masonry 열만 재배치
 → 스크롤 방향에 맞춰 다음 이미지 준비
+→ 디렉터리 스캔 완료 후 전체 메타데이터를 동시 1개로 저속 준비
 ```
 
 `scanDirectory()`는 파일마다 `getFile()`이나 `URL.createObjectURL()`을 호출하지 않는다. 첫 항목과 64개 단위 중간 결과를 앱에 전달하고 이벤트 루프에 양보한다.
@@ -41,19 +42,37 @@ Barceltool은 로컬 이미지 폴더를 빠르게 훑고 관리하는 브라우
 1. 현재 화면과 교차하는 이미지
 2. 화면 아래 500px
 3. 화면 위 500px
-4. 현재 스크롤 방향에 있는 이미지
+4. 현재 스크롤 방향 4000px, 반대 방향 1500px 안의 이미지
 5. 나머지 렌더 버퍼 이미지
 
-같은 이미지가 다시 요청되면 작업을 중복 생성하지 않고 기존 대기 작업의 우선순위만 올린다. 새 폴더를 불러오면 대기 Queue를 초기화하고 이전 Object URL을 정리한다.
+같은 이미지가 다시 요청되면 작업을 중복 생성하지 않고 기존 대기 작업의 우선순위만 올린다. 선행 로딩은 최대 300개이며 빠른 스크롤·정렬로 대상이 바뀌면 이전 pending 작업을 제거한다. Queue 키는 이동·이름 변경에 안전하도록 경로가 아닌 이미지 객체 참조를 사용한다.
 
 이미지 로더는 다음 순서로 동작한다.
 
 1. 필요한 시점에 `fileHandle.getFile()` 호출
-2. 가능하면 `createImageBitmap(file)`로 가로·세로 크기 확인
-3. 크기 확인 직후 `bitmap.close()`
-4. Object URL 한 번 생성
-5. bitmap을 지원하지 않는 형식은 `Image()`로 크기 확인
+2. 이미 백그라운드 메타데이터나 캐시에 크기가 있으면 그대로 사용
+3. 없으면 파일 헤더, `createImageBitmap()`, `Image()` 순으로 크기 확인
+4. bitmap을 사용했다면 즉시 `close()`
+5. Object URL 한 번 생성
 6. VirtualRenderer의 현재 카드만 실제 `img.src` 연결
+
+### 전체 메타데이터 인덱스와 캐시
+
+- 디렉터리 스캔과 첫 화면 표시가 끝난 뒤 `BackgroundMetadataIndexer`를 시작한다.
+- 동시 처리 수는 1개이며 `requestIdleCallback()` 단위로 한 장씩 처리한다.
+- 스크롤 후 250ms, 파일 작업, 스캔, 빠른 이동 중에는 백그라운드 분석을 멈춘다.
+- 전체 이미지에 `lastModified`, `fileSize`, `naturalWidth`, `naturalHeight`만 남기고 `File`, Object URL, bitmap은 남기지 않는다.
+- 진행 상태는 제목 옆에 `정보 준비 · 처리 / 전체`로 표시한다.
+- IndexedDB `barceltool-metadata`에 루트·상대경로·수정시각·파일 크기·해상도를 저장한다.
+- 다음 스캔에서는 캐시된 정렬·Masonry 정보를 즉시 우선 적용하고, 수정시각과 파일 크기를 저속 검증해 변경되지 않은 이미지는 디코딩을 피한다.
+- 최신·해상도 정렬은 메타데이터 준비 완료 시 한 번 정확하게 다시 적용한다.
+
+### Object URL LRU
+
+- 전체 메타데이터는 유지하지만 실제 `File`과 Object URL은 LRU로 관리한다.
+- 최대 500개 또는 파일 크기 합계 약 512MB를 기준으로 오래된 리소스를 해제한다.
+- 현재 DOM 카드, 미리보기 이미지, 빠른 이동 현재 이미지는 eviction에서 보호한다.
+- eviction 후에도 이름·경로·수정일·해상도는 유지하므로 정렬과 Masonry에는 영향을 주지 않는다.
 
 ## 4. Masonry와 Virtual Scroll
 
@@ -70,7 +89,7 @@ Barceltool은 로컬 이미지 폴더를 빠르게 훑고 관리하는 브라우
 
 ### VirtualRenderer
 
-- 현재 화면 위아래 1000px만 렌더링한다.
+- 현재 화면 위아래 1200px만 DOM으로 렌더링한다.
 - DOM 카드 수는 최대 150개다.
 - 카드 DOM을 풀링해서 재사용한다.
 - 공간 버킷으로 현재 범위의 위치만 조회한다.
@@ -98,7 +117,7 @@ Barceltool은 로컬 이미지 폴더를 빠르게 훑고 관리하는 브라우
 - 토글은 `barceltool.includeDescendants` 키로 `localStorage`에 저장하며 저장값이 없으면 ON이다.
 - 오른쪽 제목줄에서 이름·최신·크기(해상도)·무작위 정렬을 선택한다.
 - 이름은 `localeCompare()`의 한글·숫자 자연 정렬, 최신은 메모리에 로드된 `File.lastModified`, 크기는 `naturalWidth × naturalHeight`를 사용한다.
-- 날짜와 해상도 정렬은 초기 속도를 해치지 않도록 정렬을 위해 파일을 추가로 읽지 않으며, 아직 로드되지 않은 값은 0으로 취급하고 파일명으로 순서를 안정화한다.
+- 정렬 버튼 자체는 파일을 추가로 읽지 않는다. 백그라운드 준비 중인 날짜·해상도 값은 0과 파일명으로 임시 정렬하고 전체 준비 완료 시 한 번 정확하게 다시 정렬한다.
 - 이름·최신·크기는 ↑/↓ 한 버튼으로 방향을 바꾸고, 무작위에서는 ↻ 버튼으로 새 시드를 만들어 다시 섞는다.
 - 무작위는 저장된 시드로 Fisher–Yates를 실행하므로 Masonry 재계산만으로 순서가 바뀌지 않는다.
 - 정렬 변경은 새 `visibleImages`를 기존 Masonry와 VirtualRenderer에 전달하고 스크롤을 맨 위로 이동한다.
@@ -215,24 +234,26 @@ barceltool/
    ├─ app.js
    ├─ file-system.js
    ├─ masonry.js
+   ├─ metadata.js
    ├─ quick-move.js
    └─ modal.js
 ```
 
 - `file-system.js`: 메타데이터 우선 점진 스캔, 권한, 이동·삭제
 - `masonry.js`: `MasonryLayout`, `VirtualRenderer`, `ImageLoadQueue`
+- `metadata.js`: 헤더 크기 분석, 백그라운드 메타데이터 Queue, IndexedDB 캐시, Object URL LRU
 - `quick-move.js`: 회전 대기열, 항목 상태와 진행 통계를 관리하는 `QuickMoveSession`
 - `app.js`: 점진 스캔 화면 반영, 지연 이미지 로더, 기존 기능 연결
 - `modal.js`: 확인·충돌·진행·결과 모달
 
-각 파일은 IIFE로 격리하고 공유 기능만 `window.BarcelFileSystem`, `window.BarcelMasonry`, `window.BarcelQuickMove`, `window.BarcelModal`로 노출한다.
+각 파일은 IIFE로 격리하고 공유 기능만 `window.BarcelFileSystem`, `window.BarcelMasonry`, `window.BarcelMetadata`, `window.BarcelQuickMove`, `window.BarcelModal`로 노출한다.
 
 ## 11. 남은 병목과 향후 최적화
 
 - File System Access API의 디렉터리 엔트리 열거 시간 자체는 브라우저와 저장장치 성능에 영향을 받는다.
-- 3만 개 메타데이터와 Object URL이 생성된 화면 근처 데이터는 메모리에 남는다.
-- 현재 비율 캐시가 없어 폴더를 다시 열면 화면 근처 비율을 다시 읽는다.
-- 다음 단계로 IndexedDB에 `경로 + 수정 시각 + 크기 + 비율` 캐시를 저장할 수 있다.
+- 3만 개 파일의 최초 메타데이터 인덱싱 시간은 저장장치 속도와 AVIF 등 fallback 디코딩 비율에 영향을 받는다.
+- IndexedDB 캐시의 루트 식별자는 현재 루트 폴더명이라 서로 다른 위치의 동명 루트는 캐시 키가 겹칠 수 있다.
+- Object URL LRU는 원본 리소스 수를 제한하지만 브라우저 내부 GPU 디코딩 메모리를 직접 측정하지는 못한다.
 - 실제 1천·5천·3만 장 폴더에서 첫 placeholder 표시 시간과 스크롤 프레임을 별도로 프로파일링해야 한다.
 - 파일 시스템 엔트리 열거를 Web Worker로 옮길 수는 없으므로 메인 스레드 양보 주기를 계속 조정해야 한다.
 - 빠른 이동 세션은 브라우저를 새로고침하면 복원되지 않으며 폴더 슬롯만 유지한다.

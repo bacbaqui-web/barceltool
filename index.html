@@ -45,7 +45,10 @@
 
         <section id="contentPanel" class="content-panel">
           <div id="contentHeader" class="content-header" hidden>
-            <h1 id="statusText"></h1>
+            <div class="content-title">
+              <h1 id="statusText"></h1>
+              <span id="metadataStatus" class="metadata-status" role="status" aria-live="polite" hidden></span>
+            </div>
             <div class="content-actions">
               <span id="selectionCount" class="selection-count" hidden></span>
               <div class="sort-control" aria-label="이미지 정렬">
@@ -145,6 +148,7 @@
     <script src="./js/file-system.js"></script>
     <script src="./js/modal.js"></script>
     <script src="./js/masonry.js"></script>
+    <script src="./js/metadata.js"></script>
     <script src="./js/quick-move.js"></script>
     <script src="./js/app.js"></script>
   </body>

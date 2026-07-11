@@ -5,6 +5,8 @@
 ## 주요 기능
 
 - 메타데이터 우선 점진 로딩과 화면 우선 이미지 Queue
+- 전체 메타데이터 백그라운드 인덱싱과 IndexedDB 재사용
+- 방향 기반 선행 로딩과 Object URL LRU 메모리 제한
 - Masonry Gallery와 Virtual Scrolling
 - 직접 이미지 개수가 표시되는 폴더 트리와 하위 폴더 포함 ON/OFF 보기
 - 다중 선택과 Space 미리보기

@@ -87,17 +87,34 @@ class MasonryLayout {
 }
 
 class VirtualRenderer {
-  constructor({ scrollElement, canvasElement, createCard, updateCard, onImageNeeded, buffer = 1000, maxNodes = 150 }) {
+  constructor({
+    scrollElement,
+    canvasElement,
+    createCard,
+    updateCard,
+    onImageNeeded,
+    onPrefetchSet,
+    buffer = 1200,
+    forwardPrefetch = 4000,
+    backwardPrefetch = 1500,
+    maxPrefetch = 300,
+    maxNodes = 150,
+  }) {
     this.scrollElement = scrollElement;
     this.canvasElement = canvasElement;
     this.createCard = createCard;
     this.updateCard = updateCard;
     this.onImageNeeded = onImageNeeded;
+    this.onPrefetchSet = onPrefetchSet;
     this.buffer = buffer;
+    this.forwardPrefetch = forwardPrefetch;
+    this.backwardPrefetch = backwardPrefetch;
+    this.maxPrefetch = maxPrefetch;
     this.maxNodes = maxNodes;
     this.items = [];
     this.positions = [];
     this.rendered = new Map();
+    this.renderedItems = new Map();
     this.pool = [];
     this.spatialBuckets = new Map();
     this.bucketSize = 600;
@@ -116,6 +133,8 @@ class VirtualRenderer {
     this.recycleAll();
     this.items = items;
     this.positions = positions;
+    this.lastScrollTop = this.scrollElement.scrollTop;
+    this.scrollDirection = "down";
     this.buildSpatialIndex();
     this.canvasElement.style.height = `${Math.max(0, totalHeight)}px`;
     this.scheduleRender();
@@ -174,12 +193,39 @@ class VirtualRenderer {
       }
       this.positionCard(card, position);
       this.updateCard(card, this.items[position.index], position.index);
+      this.renderedItems.set(position.index, this.items[position.index]);
       this.onImageNeeded?.(
         this.items[position.index],
         this.getLoadPriority(position, viewportTop, viewportBottom),
       );
       const image = card.querySelector("img");
       if (image && !image.hasAttribute("src")) this.imageObserver.observe(image);
+    });
+    this.prefetchNearby(viewportTop, viewportBottom, required.map((position) => this.items[position.index]));
+  }
+
+  prefetchNearby(viewportTop, viewportBottom, requiredItems = []) {
+    const rangeTop = Math.max(0, viewportTop - (this.scrollDirection === "up" ? this.forwardPrefetch : this.backwardPrefetch));
+    const rangeBottom = viewportBottom + (this.scrollDirection === "down" ? this.forwardPrefetch : this.backwardPrefetch);
+    const indexes = new Set();
+    const firstBucket = Math.floor(rangeTop / this.bucketSize);
+    const lastBucket = Math.floor(rangeBottom / this.bucketSize);
+    for (let bucket = firstBucket; bucket <= lastBucket; bucket += 1) {
+      this.spatialBuckets.get(bucket)?.forEach((index) => indexes.add(index));
+    }
+    const center = this.scrollDirection === "down" ? viewportBottom : viewportTop;
+    const positions = [...indexes]
+      .map((index) => this.positions[index])
+      .filter((position) => position && position.y + position.height >= rangeTop && position.y <= rangeBottom)
+      .sort((left, right) => Math.abs(left.y - center) - Math.abs(right.y - center))
+      .slice(0, this.maxPrefetch);
+    const items = [...new Set([
+      ...requiredItems,
+      ...positions.map((position) => this.items[position.index]).filter(Boolean),
+    ])];
+    this.onPrefetchSet?.(items);
+    positions.forEach((position) => {
+      this.onImageNeeded?.(this.items[position.index], this.getLoadPriority(position, viewportTop, viewportBottom));
     });
   }
 
@@ -191,6 +237,10 @@ class VirtualRenderer {
         image.src = image.dataset.src;
       }
     }
+  }
+
+  getRenderedItems() {
+    return new Set([...this.renderedItems.values()].filter(Boolean));
   }
 
   getLoadPriority(position, viewportTop, viewportBottom) {
@@ -241,6 +291,7 @@ class VirtualRenderer {
     }
     card.remove();
     this.rendered.delete(index);
+    this.renderedItems.delete(index);
     this.pool.push(card);
   }
 
@@ -270,8 +321,7 @@ class ImageLoadQueue {
 
   enqueue(item, priority = 4) {
     if (!item || item.objectUrl && item.naturalWidth && item.naturalHeight) return Promise.resolve(item);
-    const key = item.relativePath;
-    const existing = this.pending.get(key);
+    const existing = this.pending.get(item);
     if (existing) {
       existing.priority = Math.min(existing.priority, priority);
       return existing.promise;
@@ -281,9 +331,13 @@ class ImageLoadQueue {
     let rejectTask;
     const promise = new Promise((resolve, reject) => { resolveTask = resolve; rejectTask = reject; });
     item.loadPromise = promise;
-    this.pending.set(key, { item, priority, promise, resolveTask, rejectTask, generation: this.generation });
+    this.pending.set(item, { item, priority, promise, resolveTask, rejectTask, generation: this.generation });
     this.pump();
     return promise;
+  }
+
+  get busy() {
+    return this.active > 0 || this.pending.size > 0;
   }
 
   clear() {
@@ -295,10 +349,20 @@ class ImageLoadQueue {
     this.pending.clear();
   }
 
+  retain(items, maximumProtectedPriority = -1) {
+    const retained = new Set(items);
+    for (const [item, task] of this.pending) {
+      if (task.priority <= maximumProtectedPriority || retained.has(task.item)) continue;
+      this.pending.delete(item);
+      task.item.loadPromise = null;
+      task.resolveTask(task.item);
+    }
+  }
+
   pump() {
     while (this.active < this.concurrency && this.pending.size) {
       const task = [...this.pending.values()].sort((a, b) => a.priority - b.priority)[0];
-      this.pending.delete(task.item.relativePath);
+      this.pending.delete(task.item);
       this.active += 1;
       this.loader(task.item)
         .then((item) => {

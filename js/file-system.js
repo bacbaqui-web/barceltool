@@ -53,6 +53,11 @@ async function processDirectoryEntry(name, handle, parentHandle, folderNode, sca
     folderPath: folderNode.fullPath,
     pathParts: relativePath.split("/"),
     objectUrl: null,
+    lastModified: 0,
+    fileSize: 0,
+    naturalWidth: 0,
+    naturalHeight: 0,
+    metadataValidated: false,
   });
   await emitScanProgress(scanContext);
 }
@@ -76,6 +81,11 @@ async function scanTrashImages(directoryHandle, rootName, folderPath, scanContex
       folderPath,
       pathParts: [rootName, ...relativePath.split("/").slice(1)],
       objectUrl: null,
+      lastModified: 0,
+      fileSize: 0,
+      naturalWidth: 0,
+      naturalHeight: 0,
+      metadataValidated: false,
       isTrashItem: true,
     });
     await emitScanProgress(scanContext);

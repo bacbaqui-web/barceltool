@@ -23,6 +23,12 @@ const {
   updateModalProgress,
 } = window.BarcelModal;
 const { ImageLoadQueue, MasonryLayout, VirtualRenderer } = window.BarcelMasonry;
+const {
+  BackgroundMetadataIndexer,
+  ImageResourceCache,
+  MetadataCache,
+  readImageDimensionsFromHeader,
+} = window.BarcelMetadata;
 const { QuickMoveSession } = window.BarcelQuickMove;
 
 const state = {
@@ -56,6 +62,10 @@ const state = {
   sortMode: "name",
   sortAscending: true,
   randomSeed: createRandomSeed(),
+  metadataCacheEntries: new Map(),
+  metadataIndexComplete: false,
+  metadataPauseUntil: 0,
+  metadataStatusHideTimer: 0,
 };
 
 const elements = {
@@ -68,6 +78,7 @@ const elements = {
   contentPanel: document.querySelector("#contentPanel"),
   contentHeader: document.querySelector("#contentHeader"),
   statusText: document.querySelector("#statusText"),
+  metadataStatus: document.querySelector("#metadataStatus"),
   selectionCount: document.querySelector("#selectionCount"),
   columnSlider: document.querySelector("#columnSlider"),
   columnCount: document.querySelector("#columnCount"),
@@ -108,11 +119,7 @@ const masonryLayout = new MasonryLayout({ minColumnWidth: 220, gap: 14, padding:
 const imageLoadQueue = new ImageLoadQueue({
   loader: loadImageResource,
   onLoaded: handleQueuedImageLoaded,
-  onDiscarded: (image) => {
-    if (image.objectUrl) URL.revokeObjectURL(image.objectUrl);
-    image.objectUrl = null;
-    image.file = null;
-  },
+  onDiscarded: (image) => resourceCache.remove(image, true),
   concurrency: 4,
 });
 const virtualRenderer = new VirtualRenderer({
@@ -120,9 +127,27 @@ const virtualRenderer = new VirtualRenderer({
   canvasElement: elements.masonryCanvas,
   createCard: createThumbnailCard,
   updateCard: updateThumbnailCard,
-  onImageNeeded: (image, priority) => imageLoadQueue.enqueue(image, priority).catch(() => {}),
-  buffer: 1000,
+  onImageNeeded: requestImageResource,
+  onPrefetchSet: (images) => imageLoadQueue.retain(images),
+  buffer: 1200,
+  forwardPrefetch: 4000,
+  backwardPrefetch: 1500,
+  maxPrefetch: 300,
   maxNodes: 150,
+});
+const metadataCache = new MetadataCache();
+const resourceCache = new ImageResourceCache({
+  maxEntries: 500,
+  maxBytes: 512 * 1024 * 1024,
+  getProtectedItems: getProtectedResourceItems,
+  onEvicted: () => virtualRenderer.refreshRenderedCards(),
+});
+const metadataIndexer = new BackgroundMetadataIndexer({
+  loader: loadImageMetadata,
+  onProgress: updateMetadataProgress,
+  onComplete: handleMetadataIndexComplete,
+  shouldPause: shouldPauseMetadataIndex,
+  concurrency: 1,
 });
 const galleryResizeObserver = new ResizeObserver(() => scheduleMasonryLayout());
 galleryResizeObserver.observe(elements.imageGrid);
@@ -143,6 +168,7 @@ elements.imageGrid.addEventListener("dblclick", handleGridDoubleClick);
 elements.imageGrid.addEventListener("contextmenu", handleContextMenu);
 elements.imageGrid.addEventListener("dragstart", handleDragStart);
 elements.imageGrid.addEventListener("dragend", clearDragState);
+elements.imageGrid.addEventListener("scroll", noteGalleryActivity, { passive: true });
 elements.contentPanel.addEventListener("click", handleContentBackgroundClick);
 elements.contextMenu.addEventListener("click", handleContextCommand);
 elements.previewOverlay.addEventListener("click", handlePreviewOverlayClick);
@@ -155,6 +181,34 @@ document.addEventListener("click", (event) => {
 });
 document.addEventListener("keydown", handleKeyDown);
 window.addEventListener("beforeunload", () => revokeImageUrls([...state.images, ...state.trashImages]));
+
+function getProtectedResourceItems() {
+  const protectedItems = virtualRenderer.getRenderedItems();
+  const previewImage = state.visibleImages[state.previewIndex];
+  if (previewImage) protectedItems.add(previewImage);
+  const quickMoveImage = state.quickMoveSession?.currentEntry?.image;
+  if (quickMoveImage) protectedItems.add(quickMoveImage);
+  return protectedItems;
+}
+
+function noteGalleryActivity() {
+  state.metadataPauseUntil = performance.now() + 250;
+}
+
+function shouldPauseMetadataIndex() {
+  return state.scanning
+    || state.operationInProgress
+    || Boolean(state.quickMoveSession)
+    || performance.now() < state.metadataPauseUntil;
+}
+
+function requestImageResource(image, priority) {
+  if (image?.objectUrl) {
+    resourceCache.touch(image);
+    return;
+  }
+  imageLoadQueue.enqueue(image, priority).catch(() => {});
+}
 
 function readSavedColumnCount() {
   try {
@@ -451,8 +505,14 @@ async function loadFromHandle(preferredFolderPath) {
   setScanning(true);
   try {
     const previousImages = [...state.images, ...state.trashImages];
+    metadataIndexer.clear();
     imageLoadQueue.clear();
     revokeImageUrls(previousImages);
+    resourceCache.clear({ revoke: false });
+    clearTimeout(state.metadataStatusHideTimer);
+    state.metadataCacheEntries = new Map();
+    state.metadataIndexComplete = false;
+    elements.metadataStatus.hidden = true;
     state.images = [];
     state.trashImages = [];
     state.visibleImages = [];
@@ -507,11 +567,67 @@ async function loadFromHandle(preferredFolderPath) {
     state.viewingTrash = false;
     restoreQuickMoveSlots();
     paintSnapshot(result, !firstPaintDone, true);
+    startBackgroundMetadataIndex([...result.images, ...result.trashImages]);
   } catch (error) {
     await showInfo("폴더를 읽을 수 없습니다", describeError(error));
   } finally {
     setScanning(false);
   }
+}
+
+async function startBackgroundMetadataIndex(images) {
+  const rootHandle = state.rootDirectoryHandle;
+  if (!rootHandle) return;
+  elements.metadataStatus.hidden = false;
+  elements.metadataStatus.textContent = `정보 준비 · 0 / ${images.length.toLocaleString("ko-KR")}`;
+  const cacheEntries = await metadataCache.loadRoot(rootHandle.name);
+  if (state.rootDirectoryHandle !== rootHandle) return;
+  state.metadataCacheEntries = cacheEntries;
+  let restoredCount = 0;
+  images.forEach((image) => {
+    const cached = cacheEntries.get(image.relativePath);
+    if (!cached?.naturalWidth || !cached?.naturalHeight) return;
+    image.lastModified = cached.lastModified;
+    image.fileSize = cached.fileSize;
+    image.naturalWidth = cached.naturalWidth;
+    image.naturalHeight = cached.naturalHeight;
+    image.metadataValidated = false;
+    restoredCount += 1;
+  });
+  if (restoredCount && !state.quickMoveSession && !state.operationInProgress) {
+    if (state.sortMode === "date" || state.sortMode === "resolution") updateVisibleImages({ preserveNodes: false });
+    else calculateAndRenderMasonry(true);
+  }
+  state.metadataIndexComplete = images.length === 0;
+  metadataIndexer.start(images, { rootName: rootHandle.name, cacheEntries });
+}
+
+function updateMetadataProgress({ processed, total, failed }) {
+  if (!state.rootDirectoryHandle) return;
+  elements.metadataStatus.hidden = false;
+  const failureText = failed ? ` · 실패 ${failed.toLocaleString("ko-KR")}` : "";
+  elements.metadataStatus.textContent = `정보 준비 · ${processed.toLocaleString("ko-KR")} / ${total.toLocaleString("ko-KR")}${failureText}`;
+}
+
+function handleMetadataIndexComplete({ total, failed }) {
+  state.metadataIndexComplete = true;
+  const failureText = failed ? ` · 실패 ${failed.toLocaleString("ko-KR")}` : "";
+  elements.metadataStatus.textContent = `정보 준비 완료 · ${total.toLocaleString("ko-KR")}개${failureText}`;
+  const metadataSortActive = state.sortMode === "date" || state.sortMode === "resolution";
+  if (!state.quickMoveSession && !state.operationInProgress) {
+    if (metadataSortActive) {
+      const previewImage = state.visibleImages[state.previewIndex] || null;
+      state.selectionAnchor = -1;
+      updateVisibleImages({ resetScroll: true });
+      if (previewImage && !elements.previewOverlay.hidden) {
+        state.previewIndex = state.visibleImages.indexOf(previewImage);
+        if (state.previewIndex >= 0) updatePreview();
+        else closePreview();
+      }
+    } else calculateAndRenderMasonry(true);
+  }
+  clearTimeout(state.metadataStatusHideTimer);
+  state.metadataStatusHideTimer = setTimeout(() => { elements.metadataStatus.hidden = true; }, 3000);
 }
 
 function setScanning(scanning) {
@@ -636,8 +752,9 @@ function updateVisibleImages({ resetScroll = false, preserveNodes = false } = {}
   state.visibleImages = sortImages(state.viewingTrash ? state.trashImages : visibleImages);
   updateFolderImageCountBadges();
   const previousScrollTop = elements.imageGrid.scrollTop;
+  if (resetScroll) elements.imageGrid.scrollTop = 0;
   renderImageGrid(preserveNodes);
-  elements.imageGrid.scrollTop = resetScroll ? 0 : previousScrollTop;
+  if (!resetScroll) elements.imageGrid.scrollTop = previousScrollTop;
   updateToolbar();
 }
 
@@ -731,39 +848,104 @@ function readImageDimensions(objectUrl) {
   });
 }
 
-async function loadImageResource(image) {
-  if (image.objectUrl && image.naturalWidth && image.naturalHeight) return image;
-  const file = await image.fileHandle.getFile();
-  let width = 0;
-  let height = 0;
+async function readDimensionsForFile(file, extension) {
+  const headerDimensions = await readImageDimensionsFromHeader(file, extension).catch(() => null);
+  if (headerDimensions?.width > 0 && headerDimensions?.height > 0) return headerDimensions;
   if ("createImageBitmap" in window) {
+    let bitmap = null;
     try {
-      const bitmap = await createImageBitmap(file);
-      width = bitmap.width;
-      height = bitmap.height;
-      bitmap.close();
+      bitmap = await createImageBitmap(file);
+      if (bitmap.width > 0 && bitmap.height > 0) return { width: bitmap.width, height: bitmap.height };
     } catch {}
+    finally { bitmap?.close(); }
   }
+  const temporaryUrl = URL.createObjectURL(file);
+  try { return await readImageDimensions(temporaryUrl); }
+  finally { URL.revokeObjectURL(temporaryUrl); }
+}
+
+function applyCachedImageMetadata(image, file, cacheEntries = state.metadataCacheEntries) {
+  image.lastModified = file.lastModified;
+  image.fileSize = file.size;
+  const cached = cacheEntries.get(image.relativePath);
+  if (!cached || cached.lastModified !== file.lastModified || cached.fileSize !== file.size) return false;
+  image.naturalWidth = cached.naturalWidth;
+  image.naturalHeight = cached.naturalHeight;
+  image.metadataValidated = image.naturalWidth > 0 && image.naturalHeight > 0;
+  return image.naturalWidth > 0 && image.naturalHeight > 0;
+}
+
+function cacheImageMetadata(image, rootName = state.rootDirectoryHandle?.name, cacheEntries = state.metadataCacheEntries) {
+  if (!rootName || !image.lastModified || !image.fileSize || !image.naturalWidth || !image.naturalHeight) return Promise.resolve();
+  const record = {
+    relativePath: image.relativePath,
+    lastModified: image.lastModified,
+    fileSize: image.fileSize,
+    naturalWidth: image.naturalWidth,
+    naturalHeight: image.naturalHeight,
+  };
+  cacheEntries.set(image.relativePath, record);
+  return metadataCache.put(rootName, image).catch(() => {});
+}
+
+async function loadImageMetadata(image, context) {
+  if (image.metadataValidated && image.lastModified && image.naturalWidth && image.naturalHeight) return image;
+  if (image.loadPromise) {
+    await image.loadPromise.catch(() => {});
+    if (image.metadataValidated && image.lastModified && image.naturalWidth && image.naturalHeight) return image;
+  }
+  const sourceHandle = image.fileHandle;
+  const file = await sourceHandle.getFile();
+  if (image.fileHandle !== sourceHandle) throw new Error("파일 위치가 변경되었습니다.");
+  const cacheHit = applyCachedImageMetadata(image, file, context.cacheEntries);
+  if (!cacheHit) {
+    const dimensions = await readDimensionsForFile(file, image.extension);
+    if (image.fileHandle !== sourceHandle) throw new Error("파일 위치가 변경되었습니다.");
+    image.naturalWidth = dimensions.width || 1;
+    image.naturalHeight = dimensions.height || 1;
+    image.metadataValidated = true;
+    await cacheImageMetadata(image, context.rootName, context.cacheEntries);
+  }
+  image.metadataValidated = true;
+  return image;
+}
+
+async function loadImageResource(image) {
+  if (image.objectUrl && image.naturalWidth && image.naturalHeight) {
+    resourceCache.touch(image);
+    return image;
+  }
+  const rootHandleAtRequest = state.rootDirectoryHandle;
+  const rootNameAtRequest = rootHandleAtRequest?.name;
+  const cacheEntriesAtRequest = state.metadataCacheEntries;
+  const sourceHandle = image.fileHandle;
+  const file = await sourceHandle.getFile();
+  const cacheHit = applyCachedImageMetadata(image, file, cacheEntriesAtRequest);
+  let width = image.naturalWidth || 0;
+  let height = image.naturalHeight || 0;
+  if (!cacheHit && (!width || !height)) {
+    const dimensions = await readDimensionsForFile(file, image.extension);
+    width = dimensions.width;
+    height = dimensions.height;
+  }
+  if (image.fileHandle !== sourceHandle) throw new Error("파일 위치가 변경되었습니다.");
   const objectUrl = URL.createObjectURL(file);
-  try {
-    if (!width || !height) {
-      const dimensions = await readImageDimensions(objectUrl);
-      width = dimensions.width;
-      height = dimensions.height;
-    }
-  } catch (error) {
-    URL.revokeObjectURL(objectUrl);
-    throw error;
-  }
   image.file = file;
   image.lastModified = file.lastModified;
+  image.fileSize = file.size;
   image.objectUrl = objectUrl;
   image.naturalWidth = width || 1;
   image.naturalHeight = height || 1;
+  image.metadataValidated = true;
+  if (!cacheHit && state.rootDirectoryHandle === rootHandleAtRequest) {
+    cacheImageMetadata(image, rootNameAtRequest, cacheEntriesAtRequest);
+  }
   return image;
 }
 
 function handleQueuedImageLoaded(image) {
+  resourceCache.touch(image);
+  setTimeout(() => resourceCache.prune(), 0);
   const index = state.visibleImages.indexOf(image);
   if (index >= 0) state.measuredImageIndexes.add(index);
   virtualRenderer.refreshRenderedCards();
@@ -990,7 +1172,7 @@ async function runFileOperation(title, images, worker, verb, { silent = false } 
 }
 
 function removeImageFromState(image) {
-  URL.revokeObjectURL(image.objectUrl);
+  resourceCache.remove(image, true);
   state.images = state.images.filter((item) => item !== image);
   state.trashImages = state.trashImages.filter((item) => item !== image);
   state.trashCount = state.trashImages.length;
@@ -1001,7 +1183,7 @@ function removeImageFromState(image) {
 function addTrashImage(sourceImage, result) {
   const folderPath = `${state.rootDirectoryHandle.name}/.barceltool-trash`;
   const relativePath = `${folderPath}/${result.targetName}`;
-  state.trashImages.push({
+  const trashImage = {
     file: result.file,
     fileHandle: result.fileHandle,
     parentDirectoryHandle: result.trashHandle,
@@ -1011,12 +1193,18 @@ function addTrashImage(sourceImage, result) {
     folderPath,
     pathParts: relativePath.split("/"),
     objectUrl: URL.createObjectURL(result.file),
+    lastModified: result.file.lastModified,
+    fileSize: result.file.size,
     naturalWidth: sourceImage.naturalWidth || 0,
     naturalHeight: sourceImage.naturalHeight || 0,
+    metadataValidated: Boolean(sourceImage.naturalWidth && sourceImage.naturalHeight),
     isTrashItem: true,
     originalName: sourceImage.name,
     originalFolderPath: sourceImage.folderPath,
-  });
+  };
+  state.trashImages.push(trashImage);
+  resourceCache.touch(trashImage);
+  cacheImageMetadata(trashImage);
   state.trashCount = state.trashImages.length;
 }
 
@@ -1168,9 +1356,10 @@ async function askConflict(fileName, showApplyOption) {
 
 function updateMovedImage(image, targetNode, result) {
   const oldPath = image.relativePath;
-  if (image.objectUrl) URL.revokeObjectURL(image.objectUrl);
+  resourceCache.remove(image, true);
   image.file = result.file;
   image.lastModified = result.file.lastModified;
+  image.fileSize = result.file.size;
   image.fileHandle = result.fileHandle;
   image.parentDirectoryHandle = targetNode.directoryHandle;
   image.name = result.targetName;
@@ -1178,6 +1367,9 @@ function updateMovedImage(image, targetNode, result) {
   image.folderPath = targetNode.fullPath;
   image.pathParts = image.relativePath.split("/");
   image.objectUrl = URL.createObjectURL(result.file);
+  image.metadataValidated = Boolean(image.naturalWidth && image.naturalHeight);
+  resourceCache.touch(image);
+  cacheImageMetadata(image);
   if (state.selectedPaths.delete(oldPath)) state.selectedPaths.add(image.relativePath);
 }
 
@@ -1638,14 +1830,18 @@ async function renamePreviewImage(image, requestedBaseName) {
   const oldPath = image.relativePath;
   try {
     const result = await copyThenRemove(image, image.parentDirectoryHandle, newName, false);
-    URL.revokeObjectURL(image.objectUrl);
+    resourceCache.remove(image, true);
     image.file = result.file;
     image.lastModified = result.file.lastModified;
+    image.fileSize = result.file.size;
     image.fileHandle = result.fileHandle;
     image.name = result.targetName;
     image.relativePath = `${image.folderPath}/${result.targetName}`;
     image.pathParts = image.relativePath.split("/");
     image.objectUrl = URL.createObjectURL(result.file);
+    image.metadataValidated = Boolean(image.naturalWidth && image.naturalHeight);
+    resourceCache.touch(image);
+    cacheImageMetadata(image);
     if (state.selectedPaths.delete(oldPath)) state.selectedPaths.add(image.relativePath);
     state.visibleImages = sortImages(state.visibleImages);
     state.previewIndex = state.visibleImages.indexOf(image);
